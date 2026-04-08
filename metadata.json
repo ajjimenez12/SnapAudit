@@ -1,0 +1,5 @@
+{
+  "name": "SnapAudit",
+  "description": "A native-like mobile audit tool for capturing photos, tagging issues, and generating instant reports with haptic feedback and offline support.",
+  "requestFramePermissions": ["camera", "geolocation"]
+}
