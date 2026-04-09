@@ -223,11 +223,11 @@ function AuthView() {
           />
 
           <div className="flex gap-3 pt-2">
-            <Button fullWidth disabled={isWorking || !email || !password} onClick={signIn}>
-              {isWorking ? 'Working...' : 'Sign in'}
-            </Button>
             <Button variant="outline" fullWidth disabled={isWorking || !email || !password} onClick={signUp}>
               {isWorking ? 'Working...' : 'Sign up'}
+            </Button>
+            <Button fullWidth disabled={isWorking || !email || !password} onClick={signIn}>
+              {isWorking ? 'Working...' : 'Sign in'}
             </Button>
           </div>
         </div>
@@ -970,6 +970,7 @@ export default function App() {
       setIsGeneratingPdf(true);
       const pdfBackground = '#ffffff';
       const pdfText = '#111827';
+      let avoidBreakRects: Array<{ top: number; bottom: number }> = [];
 
       // Ensure remote photos have a signed URL before rendering the report for html2canvas.
       const needsUrls = photosToPrint.filter(p => !p.imageData && p.storagePath);
@@ -1047,28 +1048,86 @@ export default function App() {
             fixProperty('fill', pdfText);
             fixProperty('stroke', pdfText);
           }
+
+          // Collect blocks that shouldn't be split across PDF page boundaries.
+          // These correspond to the photo + comment rows in the report.
+          const clonedReport =
+            clonedDoc.getElementById(element.id) ||
+            clonedDoc.getElementById('report-to-print') ||
+            clonedDoc.getElementById('report-view');
+          if (clonedReport) {
+            const reportRect = clonedReport.getBoundingClientRect();
+            avoidBreakRects = Array.from(clonedReport.querySelectorAll('.break-inside-avoid'))
+              .map((node) => {
+                const r = (node as HTMLElement).getBoundingClientRect();
+                return { top: r.top - reportRect.top, bottom: r.bottom - reportRect.top };
+              })
+              .filter((r) => Number.isFinite(r.top) && Number.isFinite(r.bottom) && r.bottom > r.top);
+          }
         }
       });
       
-      const imgData = canvas.toDataURL('image/jpeg', 0.8);
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const imgProps = pdf.getImageProperties(imgData);
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      
-      // Handle multi-page if needed (simplified for now)
-      let heightLeft = pdfHeight;
-      let position = 0;
       const pageHeight = pdf.internal.pageSize.getHeight();
 
-      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
+      // Smart pagination: slice the rendered canvas into A4-sized strips, and try to
+      // avoid cutting through `.break-inside-avoid` blocks (photo/comment rows).
+      const mmPerPx = pdfWidth / canvas.width;
+      const pageHeightPx = Math.floor(pageHeight / mmPerPx);
 
-      while (heightLeft >= 0) {
-        position = heightLeft - pdfHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
+      // html2canvas uses `scale: 2`, so convert cloned DOM pixels into canvas pixels.
+      const avoidBlocksPx = avoidBreakRects
+        .map((r) => ({ top: Math.round(r.top * 2), bottom: Math.round(r.bottom * 2) }))
+        .filter((r) => r.bottom > r.top);
+
+      const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+      const findAdjustedBreak = (startY: number, idealBreakY: number) => {
+        const minSlice = 64; // px (avoid creating near-empty pages)
+        const ideal = clamp(idealBreakY, startY + 1, canvas.height);
+        let adjusted = ideal;
+
+        for (const block of avoidBlocksPx) {
+          const cutsThrough = block.top < adjusted && block.bottom > adjusted;
+          if (!cutsThrough) continue;
+
+          // Prefer breaking before the block if there's enough room on this page.
+          const before = block.top - 8;
+          if (before > startY + minSlice) {
+            adjusted = Math.min(adjusted, before);
+          }
+        }
+
+        // If the adjustment would create an unusably small slice, fall back.
+        if (adjusted <= startY + minSlice) return ideal;
+        return adjusted;
+      };
+
+      let sourceY = 0;
+      let isFirstPage = true;
+      while (sourceY < canvas.height) {
+        const idealBreakY = Math.min(sourceY + pageHeightPx, canvas.height);
+        let breakY = findAdjustedBreak(sourceY, idealBreakY);
+        if (breakY <= sourceY) breakY = idealBreakY;
+
+        const sliceHeight = Math.max(1, breakY - sourceY);
+
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = sliceHeight;
+        const ctx = pageCanvas.getContext('2d');
+        if (!ctx) throw new Error('Failed to get 2D context for PDF pagination');
+
+        ctx.drawImage(canvas, 0, sourceY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
+
+        const pageImgData = pageCanvas.toDataURL('image/jpeg', 0.86);
+        const pageImgHeightMm = sliceHeight * mmPerPx;
+
+        if (!isFirstPage) pdf.addPage();
+        pdf.addImage(pageImgData, 'JPEG', 0, 0, pdfWidth, pageImgHeightMm);
+
+        isFirstPage = false;
+        sourceY += sliceHeight;
       }
 
       const pdfBlob = pdf.output('blob');
