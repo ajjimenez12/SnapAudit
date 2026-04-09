@@ -1065,6 +1065,27 @@ export default function App() {
                 return { top: r.top - reportRect.top, bottom: r.bottom - reportRect.top };
               })
               .filter((r) => Number.isFinite(r.top) && Number.isFinite(r.bottom) && r.bottom > r.top);
+
+            // Prevent "orphan" category headers at the bottom of a page by keeping each
+            // header with at least the first row in its section.
+            const keepWithNextRects = Array.from(clonedReport.querySelectorAll('section'))
+              .map((section) => {
+                const header = section.querySelector('h2');
+                const firstRow = section.querySelector('.break-inside-avoid');
+                if (!header || !firstRow) return null;
+
+                const headerRect = (header as HTMLElement).getBoundingClientRect();
+                const rowRect = (firstRow as HTMLElement).getBoundingClientRect();
+
+                const top = headerRect.top - reportRect.top;
+                const bottom = rowRect.bottom - reportRect.top;
+                if (!Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= top) return null;
+
+                return { top, bottom };
+              })
+              .filter((r): r is { top: number; bottom: number } => !!r);
+
+            avoidBreakRects = avoidBreakRects.concat(keepWithNextRects);
           }
         }
       });
