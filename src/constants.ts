@@ -2,19 +2,22 @@ import { Tag } from './types';
 
 export const PRESET_TAGS: Tag[] = [
   'Product',
-  'TM Image',
-  'Cleanliness',
-  'Safety Concern',
-  'Repair',
+  'Product Procedures',
+  'Food Safety',
   'Shelf Life',
-  'Communication'
+  'Cleanliness',
+  'Repairs',
+  'Brand Image',
+  'Brand Safety',
+  'Other'
 ];
 
 export const STORAGE_KEYS = {
   SESSIONS: 'snapaudit_sessions',
   PHOTOS: 'snapaudit_photos',
   CURRENT_SESSION_ID: 'snapaudit_current_session_id',
-  STORES: 'snapaudit_stores'
+  STORES: 'snapaudit_stores',
+  DELETED_SESSIONS: 'snapaudit_deleted_sessions'
 };
 
 export const DEFAULT_STORES = [

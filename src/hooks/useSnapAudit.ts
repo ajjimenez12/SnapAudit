@@ -30,6 +30,10 @@ export function useSnapAudit() {
     return [];
   });
 
+  const [deletedSessionIds, setDeletedSessionIds] = useState<string[]>(() => {
+    return [];
+  });
+
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => {
     return null;
   });
@@ -78,6 +82,20 @@ export function useSnapAudit() {
     }
   }, [photos, isStorageAvailable, activeUserId, storageKey]);
 
+  // Persist deleted sessions (tombstones) to prevent remote re-adding them.
+  useEffect(() => {
+    if (isStorageAvailable && activeUserId) {
+      try {
+        localStorage.setItem(
+          storageKey(STORAGE_KEYS.DELETED_SESSIONS, activeUserId),
+          JSON.stringify(deletedSessionIds)
+        );
+      } catch (e) {
+        console.error('Failed to save deleted sessions to localStorage', e);
+      }
+    }
+  }, [deletedSessionIds, isStorageAvailable, activeUserId, storageKey]);
+
   // Persist current session ID
   useEffect(() => {
     if (isStorageAvailable && activeUserId) {
@@ -109,6 +127,7 @@ export function useSnapAudit() {
   }, []);
 
   const deleteSession = useCallback((id: string) => {
+    setDeletedSessionIds(prev => (prev.includes(id) ? prev : [id, ...prev].slice(0, 500)));
     setSessions(prev => prev.filter(s => s.id !== id));
     setPhotos(prev => prev.filter(p => p.sessionId !== id));
     if (currentSessionId === id) {
@@ -157,11 +176,13 @@ export function useSnapAudit() {
     setPhotos([]);
     setStores(DEFAULT_STORES);
     setCurrentSessionId(null);
+    setDeletedSessionIds([]);
     if (isStorageAvailable) {
       if (activeUserId) {
         localStorage.removeItem(storageKey(STORAGE_KEYS.SESSIONS, activeUserId));
         localStorage.removeItem(storageKey(STORAGE_KEYS.PHOTOS, activeUserId));
         localStorage.removeItem(storageKey(STORAGE_KEYS.CURRENT_SESSION_ID, activeUserId));
+        localStorage.removeItem(storageKey(STORAGE_KEYS.DELETED_SESSIONS, activeUserId));
       }
     }
   }, [isStorageAvailable, activeUserId, storageKey]);
@@ -173,6 +194,7 @@ export function useSnapAudit() {
       setSessions([]);
       setPhotos([]);
       setCurrentSessionId(null);
+      setDeletedSessionIds([]);
       return;
     }
 
@@ -192,20 +214,36 @@ export function useSnapAudit() {
       setPhotos([]);
     }
 
+    try {
+      const savedDeleted = localStorage.getItem(storageKey(STORAGE_KEYS.DELETED_SESSIONS, userId));
+      const parsedDeleted = savedDeleted ? JSON.parse(savedDeleted) : [];
+      setDeletedSessionIds(Array.isArray(parsedDeleted) ? parsedDeleted : []);
+    } catch {
+      setDeletedSessionIds([]);
+    }
+
     setCurrentSessionId(localStorage.getItem(storageKey(STORAGE_KEYS.CURRENT_SESSION_ID, userId)));
   }, [isStorageAvailable, storageKey]);
 
   const mergeRemote = useCallback((remoteSessions: Session[], remotePhotos: PhotoEntry[]) => {
+    const deleted = new Set(deletedSessionIds);
     setSessions(prev => {
       const byId = new Map<string, Session>();
-      for (const s of remoteSessions) byId.set(s.id, s);
-      for (const s of prev) byId.set(s.id, byId.get(s.id) ?? s);
+      for (const s of remoteSessions) {
+        if (!deleted.has(s.id)) byId.set(s.id, s);
+      }
+      for (const s of prev) {
+        if (!deleted.has(s.id)) byId.set(s.id, byId.get(s.id) ?? s);
+      }
       return Array.from(byId.values()).sort((a, b) => b.createdAt - a.createdAt);
     });
     setPhotos(prev => {
       const byId = new Map<string, PhotoEntry>();
-      for (const p of remotePhotos) byId.set(p.id, p);
+      for (const p of remotePhotos) {
+        if (!deleted.has(p.sessionId)) byId.set(p.id, p);
+      }
       for (const p of prev) {
+        if (deleted.has(p.sessionId)) continue;
         const existing = byId.get(p.id);
         if (!existing) {
           byId.set(p.id, p);
@@ -221,7 +259,7 @@ export function useSnapAudit() {
       }
       return Array.from(byId.values()).sort((a, b) => b.createdAt - a.createdAt);
     });
-  }, []);
+  }, [deletedSessionIds]);
 
   return {
     sessions,

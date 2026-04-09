@@ -1,11 +1,13 @@
 export type Tag = 
   | 'Product'
-  | 'TM Image'
-  | 'Cleanliness'
-  | 'Safety Concern'
-  | 'Repair'
+  | 'Product Procedures'
+  | 'Food Safety'
   | 'Shelf Life'
-  | 'Communication';
+  | 'Cleanliness'
+  | 'Repairs'
+  | 'Brand Image'
+  | 'Brand Safety'
+  | 'Other';
 
 export interface PhotoEntry {
   id: string;

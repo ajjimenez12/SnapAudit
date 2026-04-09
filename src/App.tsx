@@ -599,6 +599,7 @@ export default function App() {
   const [printingSessionId, setPrintingSessionId] = useState<string | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [showPhotosList, setShowPhotosList] = useState(false);
+  const [showUploadPicker, setShowUploadPicker] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [lastView, setLastView] = useState<View>('home');
   const [shareMenuSession, setShareMenuSession] = useState<{session: Session, photos: PhotoEntry[]} | null>(null);
@@ -771,7 +772,55 @@ export default function App() {
     };
   }, [view]);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadImageInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePickedFile = (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+
+    vibrate(50);
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const resized = await resizeImage(reader.result as string);
+        setCapturedImage(resized);
+      } catch (error) {
+        console.error('Failed to resize image', error);
+        setCapturedImage(reader.result as string);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const pickFromFiles = async () => {
+    try {
+      const showOpenFilePicker = (window as any).showOpenFilePicker as undefined | ((options?: any) => Promise<any[]>);
+      if (showOpenFilePicker) {
+        const [handle] = await showOpenFilePicker({
+          multiple: false,
+          types: [
+            {
+              description: 'Images',
+              accept: {
+                'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.heic', '.heif'],
+              },
+            },
+          ],
+          excludeAcceptAllOption: true,
+        });
+
+        if (!handle) return;
+        const file = await handle.getFile();
+        if (file) handlePickedFile(file);
+        return;
+      }
+
+      uploadImageInputRef.current?.click();
+    } catch (e: any) {
+      // User cancel or browser restriction
+      const name = String(e?.name ?? '');
+      if (name !== 'AbortError') console.error('File picker failed', e);
+    }
+  };
 
   const currentSession = useMemo(() => 
     sessions.find(s => s.id === currentSessionId), 
@@ -809,19 +858,9 @@ export default function App() {
 
   const handleCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (file) {
-      vibrate(50);
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        try {
-          const resized = await resizeImage(reader.result as string);
-          setCapturedImage(resized);
-        } catch (error) {
-          console.error('Failed to resize image', error);
-          setCapturedImage(reader.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+      handlePickedFile(file);
     }
   };
 
@@ -878,6 +917,50 @@ export default function App() {
     window.print();
   };
 
+  const deleteSessionRemote = async (sessionId: string) => {
+    if (!user || !isOnline) return;
+
+    try {
+      const { data: photoRows, error: listErr } = await supabase
+        .from('photos')
+        .select('storage_path')
+        .eq('user_id', user.id)
+        .eq('session_id', sessionId);
+      if (listErr) throw listErr;
+
+      const paths = (photoRows ?? [])
+        .map((r: any) => String(r.storage_path ?? ''))
+        .filter(Boolean);
+
+      if (paths.length > 0) {
+        const { error: removeErr } = await supabase.storage.from('photos').remove(paths);
+        if (removeErr) console.error('Failed to remove photo files from storage', removeErr);
+      }
+
+      const { error: delPhotosErr } = await supabase
+        .from('photos')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('session_id', sessionId);
+      if (delPhotosErr) throw delPhotosErr;
+
+      const { error: delSessionErr } = await supabase
+        .from('sessions')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('id', sessionId);
+      if (delSessionErr) throw delSessionErr;
+    } catch (e) {
+      console.error('Failed to delete session remotely', e);
+    }
+  };
+
+  const deleteSessionEverywhere = async (sessionId: string) => {
+    vibrate([50, 50, 50]);
+    deleteSession(sessionId);
+    await deleteSessionRemote(sessionId);
+  };
+
   const generateAndSharePDF = async (
     session: Session, 
     photosToPrint: PhotoEntry[], 
@@ -886,6 +969,8 @@ export default function App() {
     try {
       vibrate(50);
       setIsGeneratingPdf(true);
+      const pdfBackground = '#ffffff';
+      const pdfText = '#111827';
 
       // Ensure remote photos have a signed URL before rendering the report for html2canvas.
       const needsUrls = photosToPrint.filter(p => !p.imageData && p.storagePath);
@@ -894,13 +979,6 @@ export default function App() {
         await new Promise((r) => setTimeout(r, 150));
       }
       
-      // If action is just print, we can use window.print() directly if we are in report view
-      if (action === 'print' && view === 'report') {
-        window.print();
-        setIsGeneratingPdf(false);
-        return;
-      }
-
       // Ensure the element is rendered and visible for html2canvas
       const element = document.getElementById('report-to-print') || document.getElementById('report-view');
       if (!element) {
@@ -914,9 +992,14 @@ export default function App() {
         scale: 2,
         useCORS: true,
         logging: false,
-        backgroundColor: isDarkMode ? '#030712' : '#ffffff',
+        backgroundColor: pdfBackground,
         windowWidth: 800, // Consistent width for PDF generation
         onclone: (clonedDoc) => {
+          // Force light mode inside the cloned document so PDFs always render with white backgrounds.
+          clonedDoc.documentElement.classList.remove('dark');
+          clonedDoc.body.classList.remove('dark');
+          clonedDoc.querySelectorAll('.dark').forEach((el) => el.classList.remove('dark'));
+
           // Inject a global style to override common Tailwind v4 oklch colors
           const style = clonedDoc.createElement('style');
           style.innerHTML = `
@@ -926,11 +1009,11 @@ export default function App() {
             }
             /* Force RGB/Hex for common elements to bypass oklch parsing in html2canvas */
             body, html, #report-to-print, #report-view {
-              background-color: ${isDarkMode ? '#030712' : '#ffffff'} !important;
-              color: ${isDarkMode ? '#f3f4f6' : '#111827'} !important;
+              background-color: ${pdfBackground} !important;
+              color: ${pdfText} !important;
             }
             h1, h2, h3, h4, h5, h6 {
-              color: ${isDarkMode ? '#ffffff' : '#111827'} !important;
+              color: ${pdfText} !important;
             }
             .text-blue-600 { color: #2563eb !important; }
             .text-gray-900 { color: #111827 !important; }
@@ -938,7 +1021,7 @@ export default function App() {
             .text-gray-400 { color: #9ca3af !important; }
             .bg-white { background-color: #ffffff !important; }
             .bg-gray-50 { background-color: #f9fafb !important; }
-            .dark\\:bg-gray-950 { background-color: #030712 !important; }
+            .dark\\:bg-gray-950 { background-color: #ffffff !important; }
             .border-blue-100 { border-color: #dbeafe !important; }
             .border-blue-900 { border-color: #1e3a8a !important; }
             .border-gray-900 { border-color: #111827 !important; }
@@ -959,11 +1042,11 @@ export default function App() {
               }
             };
 
-            fixProperty('color', isDarkMode ? '#f3f4f6' : '#111827');
-            fixProperty('backgroundColor', isDarkMode ? '#030712' : '#ffffff');
-            fixProperty('borderColor', isDarkMode ? '#1f2937' : '#e5e7eb');
-            fixProperty('fill', isDarkMode ? '#f3f4f6' : '#111827');
-            fixProperty('stroke', isDarkMode ? '#f3f4f6' : '#111827');
+            fixProperty('color', pdfText);
+            fixProperty('backgroundColor', pdfBackground);
+            fixProperty('borderColor', '#e5e7eb');
+            fixProperty('fill', pdfText);
+            fixProperty('stroke', pdfText);
           }
         }
       });
@@ -1144,7 +1227,7 @@ export default function App() {
                       />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-gray-800 dark:text-gray-200 text-sm leading-relaxed italic">
+                      <p className="text-gray-800 dark:text-gray-300 text-sm leading-relaxed italic">
                         "{photo.comment || 'No comment provided.'}"
                       </p>
                     </div>
@@ -1198,7 +1281,7 @@ export default function App() {
             setConfirmAction({
               title: 'Delete Session',
               message: `Are you sure you want to delete the audit for Store ${session.location}? This cannot be undone.`,
-              onConfirm: () => deleteSession(session.id)
+              onConfirm: () => { deleteSessionEverywhere(session.id); }
             });
           }}
         />
@@ -1403,7 +1486,7 @@ export default function App() {
                             setConfirmAction({
                               title: 'Delete Session',
                               message: 'Are you sure you want to delete this session and all its photos? This action cannot be undone.',
-                              onConfirm: () => { vibrate([50, 50, 50]); deleteSession(session.id); }
+                              onConfirm: () => { deleteSessionEverywhere(session.id); }
                             });
                           }}
                           className="w-10 h-10 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center hover:bg-red-200 transition-colors"
@@ -1465,9 +1548,73 @@ export default function App() {
                 }}
                 onUpload={() => {
                   vibrate(30);
-                  fileInputRef.current?.click();
+                  setShowUploadPicker(true);
                 }}
               />
+
+              {/* Upload Source Picker */}
+              <AnimatePresence>
+                {showUploadPicker && (
+                  <div className="fixed inset-0 z-[65] flex items-end sm:items-center justify-center p-4">
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      onClick={() => setShowUploadPicker(false)}
+                      className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, y: 20, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 20, scale: 0.98 }}
+                      className="relative w-full max-w-sm bg-white dark:bg-gray-900 rounded-3xl p-6 shadow-2xl pb-safe"
+                    >
+                      <h3 className="text-lg font-black tracking-tight mb-1 dark:text-white">Upload photo</h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">Choose where to import from.</p>
+
+                      <div className="space-y-3">
+                        <Button
+                          variant="secondary"
+                          fullWidth
+                          onClick={() => {
+                            vibrate(30);
+                            setShowUploadPicker(false);
+                            setTimeout(() => uploadImageInputRef.current?.click(), 0);
+                          }}
+                        >
+                          <ImageIcon size={18} />
+                          Camera roll
+                        </Button>
+
+                        <Button
+                          variant="secondary"
+                          fullWidth
+                          onClick={async () => {
+                            vibrate(30);
+                            setShowUploadPicker(false);
+                            await pickFromFiles();
+                          }}
+                        >
+                          <FileText size={18} />
+                          File
+                        </Button>
+
+                        <Button
+                          variant="ghost"
+                          fullWidth
+                          onClick={() => {
+                            vibrate(20);
+                            setShowUploadPicker(false);
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
+
               {/* Tagging Overlay */}
               <AnimatePresence>
                 {capturedImage && (
@@ -1497,7 +1644,7 @@ export default function App() {
                     transition={{ type: 'spring', damping: 25, stiffness: 200 }}
                     className="fixed inset-0 z-[60] bg-gray-50 flex flex-col"
                   >
-                    <header className="shrink-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center justify-between">
+                    <header className="shrink-0 bg-white border-b border-gray-100 px-4 pt-safe pb-4 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Button variant="ghost" onClick={() => setShowPhotosList(false)} className="-ml-2">
                           <ChevronLeft size={20} />
@@ -1569,9 +1716,8 @@ export default function App() {
       <input 
         type="file" 
         accept="image/*" 
-        capture="environment" 
         className="hidden" 
-        ref={fileInputRef}
+        ref={uploadImageInputRef}
         onChange={handleCapture}
       />
 
@@ -1920,8 +2066,8 @@ function TaggingOverlay({
   }
 
   return (
-    <div className="h-full w-full bg-white flex flex-col overflow-hidden">
-      <header className="shrink-0 p-4 pt-safe flex items-center justify-between border-b border-gray-100">
+    <div className="h-full w-full bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col overflow-hidden">
+      <header className="shrink-0 p-4 pt-safe flex items-center justify-between border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950">
         <Button variant="ghost" onClick={onCancel} className="-ml-2">
           <X size={24} />
         </Button>
@@ -1949,7 +2095,7 @@ function TaggingOverlay({
             <select
               value={tag}
               onChange={(e) => { vibrate(20); setTag(e.target.value as Tag); }}
-              className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3.5 text-sm font-bold text-gray-700 focus:border-blue-500 focus:bg-white outline-none transition-all appearance-none"
+              className="w-full bg-gray-50 dark:bg-black border-2 border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3.5 text-sm font-bold text-gray-700 dark:text-gray-100 focus:border-blue-500 focus:bg-white dark:focus:bg-black outline-none transition-all appearance-none"
             >
               {PRESET_TAGS.map(t => (
                 <option key={t} value={t}>{t}</option>
@@ -1963,13 +2109,13 @@ function TaggingOverlay({
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               placeholder="Add details about this observation..."
-              className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl p-4 text-sm focus:border-blue-500 focus:bg-white outline-none transition-all min-h-[100px] resize-none"
+              className="w-full bg-gray-50 dark:bg-black border-2 border-gray-100 dark:border-gray-800 rounded-2xl p-4 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:border-blue-500 focus:bg-white dark:focus:bg-black outline-none transition-all min-h-[100px] resize-none"
             />
           </div>
         </div>
       </div>
 
-      <footer className="p-4 pb-safe-offset-4 border-t border-gray-100 bg-gray-50/50">
+      <footer className="p-4 pb-safe-offset-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-950">
         <Button fullWidth onClick={() => onSave(tag, comment, imageData)}>
           Save Entry
         </Button>
@@ -2006,8 +2152,8 @@ function PhotoEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-white flex flex-col">
-      <div className="p-4 flex items-center justify-between border-b border-gray-100 pt-safe">
+    <div className="fixed inset-0 z-50 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col">
+      <div className="p-4 flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pt-safe bg-white dark:bg-gray-950">
         <Button variant="ghost" onClick={() => { vibrate(30); onCancel(); }}>
           <X size={24} />
         </Button>
@@ -2040,7 +2186,7 @@ function PhotoEditor({
             <select
               value={tag}
               onChange={(e) => { vibrate(30); setTag(e.target.value as Tag); }}
-              className="w-full bg-white border-2 border-gray-100 rounded-xl px-4 py-3.5 text-sm font-bold text-gray-700 focus:border-blue-500 outline-none transition-all appearance-none"
+              className="w-full bg-white dark:bg-black border-2 border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3.5 text-sm font-bold text-gray-700 dark:text-gray-100 focus:border-blue-500 outline-none transition-all appearance-none"
             >
               {PRESET_TAGS.map(t => (
                 <option key={t} value={t}>{t}</option>
@@ -2055,13 +2201,13 @@ function PhotoEditor({
               onChange={(e) => setComment(e.target.value)}
               placeholder="Add details about this issue..."
               rows={4}
-              className="w-full px-4 py-3 rounded-2xl border-2 border-gray-100 focus:border-blue-500 outline-none transition-colors resize-none"
+              className="w-full bg-white dark:bg-black px-4 py-3 rounded-2xl border-2 border-gray-100 dark:border-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:border-blue-500 outline-none transition-colors resize-none"
             />
           </div>
         </div>
       </div>
 
-      <div className="p-4 border-t border-gray-100 bg-gray-50 pb-safe">
+      <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-950 pb-safe">
         <Button fullWidth onClick={() => { vibrate(60); onSave(tag, comment, imageData); }}>
           Save Changes
         </Button>

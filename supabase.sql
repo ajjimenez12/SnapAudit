@@ -69,7 +69,8 @@ create index if not exists photos_session_id on public.photos (session_id);
 
 -- Storage policies for a private bucket named "photos".
 -- Path convention: "<auth.uid()>/<photoId>.jpg"
-alter table storage.objects enable row level security;
+-- Note: Supabase manages RLS on `storage.objects`. You may not have privileges to
+-- run `ALTER TABLE storage.objects ...` from the SQL editor; create policies only.
 
 create policy "photos_bucket_select_own" on storage.objects
 for select to authenticated
