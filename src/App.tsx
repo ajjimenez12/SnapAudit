@@ -971,6 +971,7 @@ export default function App() {
       const pdfBackground = '#ffffff';
       const pdfText = '#111827';
       let avoidBreakRects: Array<{ top: number; bottom: number }> = [];
+      let reportHeightCssPx: number | null = null;
 
       // Ensure remote photos have a signed URL before rendering the report for html2canvas.
       const needsUrls = photosToPrint.filter(p => !p.imageData && p.storagePath);
@@ -1057,6 +1058,7 @@ export default function App() {
             clonedDoc.getElementById('report-view');
           if (clonedReport) {
             const reportRect = clonedReport.getBoundingClientRect();
+            reportHeightCssPx = reportRect.height;
             avoidBreakRects = Array.from(clonedReport.querySelectorAll('.break-inside-avoid'))
               .map((node) => {
                 const r = (node as HTMLElement).getBoundingClientRect();
@@ -1077,23 +1079,32 @@ export default function App() {
       const topMarginInches = 0.75;
       const topMarginMm = topMarginInches * 25.4;
 
-      // html2canvas uses `scale: 2`, so convert cloned DOM pixels into canvas pixels.
+      const scaleY =
+        typeof reportHeightCssPx === 'number' && Number.isFinite(reportHeightCssPx) && reportHeightCssPx > 0
+          ? canvas.height / reportHeightCssPx
+          : 2;
+
+      // Convert cloned DOM (CSS px) -> rendered canvas pixels using the observed scale.
       const avoidBlocksPx = avoidBreakRects
-        .map((r) => ({ top: Math.round(r.top * 2), bottom: Math.round(r.bottom * 2) }))
-        .filter((r) => r.bottom > r.top);
+        .map((r) => ({ top: Math.round(r.top * scaleY), bottom: Math.round(r.bottom * scaleY) }))
+        .filter((r) => r.bottom > r.top)
+        .sort((a, b) => a.top - b.top);
 
       const findPageBreakY = (startY: number, maxHeightPx: number) => {
         const ideal = Math.min(startY + Math.max(1, maxHeightPx), canvas.height);
         let breakY = ideal;
+        const epsilon = 2;
 
         // Iterate a few times in case an adjustment lands inside another block.
         for (let i = 0; i < 12; i++) {
-          const hit = avoidBlocksPx.find((block) => block.top < breakY && block.bottom > breakY);
+          const hit = avoidBlocksPx.find(
+            (block) => block.top + epsilon < breakY && block.bottom - epsilon > breakY
+          );
           if (!hit) break;
 
           // Preferred behavior: push the whole block to the next page (break BEFORE it).
           if (hit.top > startY + 1) {
-            breakY = hit.top;
+            breakY = Math.max(startY + 1, hit.top);
             continue;
           }
 
@@ -1101,7 +1112,7 @@ export default function App() {
           // breaking AFTER it (only if it fits on this page).
           const pageEndY = startY + Math.max(1, maxHeightPx);
           if (hit.bottom > startY + 1 && hit.bottom <= pageEndY) {
-            breakY = hit.bottom;
+            breakY = Math.min(canvas.height, hit.bottom);
             continue;
           }
 
@@ -1959,14 +1970,29 @@ function CameraView({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
+    let isActive = true;
+
     async function startCamera() {
       try {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+        }
+
         const s = await navigator.mediaDevices.getUserMedia({ 
           video: { facingMode: 'environment' }, 
           audio: false 
         });
+
+        if (!isActive) {
+          s.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        streamRef.current = s;
         setStream(s);
         if (videoRef.current) {
           videoRef.current.srcObject = s;
@@ -1977,8 +2003,13 @@ function CameraView({
     }
     startCamera();
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      isActive = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
       }
     };
   }, []);
