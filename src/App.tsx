@@ -1074,41 +1074,55 @@ export default function App() {
       // Smart pagination: slice the rendered canvas into A4-sized strips, and try to
       // avoid cutting through `.break-inside-avoid` blocks (photo/comment rows).
       const mmPerPx = pdfWidth / canvas.width;
-      const pageHeightPx = Math.floor(pageHeight / mmPerPx);
+      const topMarginInches = 0.75;
+      const topMarginMm = topMarginInches * 25.4;
 
       // html2canvas uses `scale: 2`, so convert cloned DOM pixels into canvas pixels.
       const avoidBlocksPx = avoidBreakRects
         .map((r) => ({ top: Math.round(r.top * 2), bottom: Math.round(r.bottom * 2) }))
         .filter((r) => r.bottom > r.top);
 
-      const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
-      const findAdjustedBreak = (startY: number, idealBreakY: number) => {
-        const minSlice = 64; // px (avoid creating near-empty pages)
-        const ideal = clamp(idealBreakY, startY + 1, canvas.height);
-        let adjusted = ideal;
+      const findPageBreakY = (startY: number, maxHeightPx: number) => {
+        const ideal = Math.min(startY + Math.max(1, maxHeightPx), canvas.height);
+        let breakY = ideal;
 
-        for (const block of avoidBlocksPx) {
-          const cutsThrough = block.top < adjusted && block.bottom > adjusted;
-          if (!cutsThrough) continue;
+        // Iterate a few times in case an adjustment lands inside another block.
+        for (let i = 0; i < 12; i++) {
+          const hit = avoidBlocksPx.find((block) => block.top < breakY && block.bottom > breakY);
+          if (!hit) break;
 
-          // Prefer breaking before the block if there's enough room on this page.
-          const before = block.top - 8;
-          if (before > startY + minSlice) {
-            adjusted = Math.min(adjusted, before);
+          // Preferred behavior: push the whole block to the next page (break BEFORE it).
+          if (hit.top > startY + 1) {
+            breakY = hit.top;
+            continue;
           }
+
+          // If the block starts at/above the top of this page, try to keep it whole by
+          // breaking AFTER it (only if it fits on this page).
+          const pageEndY = startY + Math.max(1, maxHeightPx);
+          if (hit.bottom > startY + 1 && hit.bottom <= pageEndY) {
+            breakY = hit.bottom;
+            continue;
+          }
+
+          // Block is taller than a page; can't avoid cutting it.
+          breakY = ideal;
+          break;
         }
 
-        // If the adjustment would create an unusably small slice, fall back.
-        if (adjusted <= startY + minSlice) return ideal;
-        return adjusted;
+        if (breakY <= startY) return ideal;
+        return breakY;
       };
 
       let sourceY = 0;
       let isFirstPage = true;
       while (sourceY < canvas.height) {
-        const idealBreakY = Math.min(sourceY + pageHeightPx, canvas.height);
-        let breakY = findAdjustedBreak(sourceY, idealBreakY);
-        if (breakY <= sourceY) breakY = idealBreakY;
+        const pageTopMarginMm = isFirstPage ? 0 : topMarginMm;
+        const availableHeightMm = Math.max(1, pageHeight - pageTopMarginMm);
+        const availableHeightPx = Math.floor(availableHeightMm / mmPerPx);
+
+        let breakY = findPageBreakY(sourceY, availableHeightPx);
+        if (breakY <= sourceY) breakY = Math.min(sourceY + availableHeightPx, canvas.height);
 
         const sliceHeight = Math.max(1, breakY - sourceY);
 
@@ -1124,7 +1138,7 @@ export default function App() {
         const pageImgHeightMm = sliceHeight * mmPerPx;
 
         if (!isFirstPage) pdf.addPage();
-        pdf.addImage(pageImgData, 'JPEG', 0, 0, pdfWidth, pageImgHeightMm);
+        pdf.addImage(pageImgData, 'JPEG', 0, pageTopMarginMm, pdfWidth, pageImgHeightMm);
 
         isFirstPage = false;
         sourceY += sliceHeight;
