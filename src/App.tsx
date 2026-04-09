@@ -1380,7 +1380,7 @@ export default function App() {
 
   if (view === 'report' && currentSession) {
     return (
-      <div className="min-h-screen bg-white dark:bg-gray-950">
+      <div className="h-screen overflow-y-auto bg-white dark:bg-gray-950">
         <div className="max-w-4xl mx-auto p-6 md:p-12 print:p-0">
           <div className="flex flex-col gap-4 mb-8 print:hidden">
             <Button 
