@@ -599,7 +599,6 @@ export default function App() {
   const [printingSessionId, setPrintingSessionId] = useState<string | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [showPhotosList, setShowPhotosList] = useState(false);
-  const [showUploadPicker, setShowUploadPicker] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [lastView, setLastView] = useState<View>('home');
   const [shareMenuSession, setShareMenuSession] = useState<{session: Session, photos: PhotoEntry[]} | null>(null);
@@ -1548,73 +1547,9 @@ export default function App() {
                 }}
                 onUpload={() => {
                   vibrate(30);
-                  setShowUploadPicker(true);
+                  pickFromFiles();
                 }}
               />
-
-              {/* Upload Source Picker */}
-              <AnimatePresence>
-                {showUploadPicker && (
-                  <div className="fixed inset-0 z-[65] flex items-end sm:items-center justify-center p-4">
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      onClick={() => setShowUploadPicker(false)}
-                      className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-                    />
-                    <motion.div
-                      initial={{ opacity: 0, y: 20, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 20, scale: 0.98 }}
-                      className="relative w-full max-w-sm bg-white dark:bg-gray-900 rounded-3xl p-6 shadow-2xl pb-safe"
-                    >
-                      <h3 className="text-lg font-black tracking-tight mb-1 dark:text-white">Upload photo</h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">Choose where to import from.</p>
-
-                      <div className="space-y-3">
-                        <Button
-                          variant="secondary"
-                          fullWidth
-                          onClick={() => {
-                            vibrate(30);
-                            setShowUploadPicker(false);
-                            setTimeout(() => uploadImageInputRef.current?.click(), 0);
-                          }}
-                        >
-                          <ImageIcon size={18} />
-                          Camera roll
-                        </Button>
-
-                        <Button
-                          variant="secondary"
-                          fullWidth
-                          onClick={async () => {
-                            vibrate(30);
-                            setShowUploadPicker(false);
-                            await pickFromFiles();
-                          }}
-                        >
-                          <FileText size={18} />
-                          File
-                        </Button>
-
-                        <Button
-                          variant="ghost"
-                          fullWidth
-                          onClick={() => {
-                            vibrate(20);
-                            setShowUploadPicker(false);
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </motion.div>
-                  </div>
-                )}
-              </AnimatePresence>
-
               {/* Tagging Overlay */}
               <AnimatePresence>
                 {capturedImage && (
