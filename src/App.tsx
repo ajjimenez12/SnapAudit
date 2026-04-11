@@ -698,41 +698,12 @@ export default function App() {
     const datePart = new Date(photo.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const suggestedName = `snapaudit-${tagPart}-${datePart}.${ext}`;
 
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
-
-    try {
-      const picker = (window as any).showSaveFilePicker;
-      if (!isMobile && typeof picker === 'function') {
-        const handle = await picker({
-          suggestedName,
-          types: [
-            {
-              description: 'Image',
-              accept: {
-                'image/jpeg': ['.jpg', '.jpeg'],
-                'image/png': ['.png'],
-                'image/webp': ['.webp']
-              }
-            }
-          ]
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        setToastMessage('Image saved');
-        return;
-      }
-    } catch (e: any) {
-      if (e?.name === 'AbortError') return;
-      console.warn('Save-as picker failed; falling back to download.', e);
-    }
-
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = suggestedName;
     a.rel = 'noopener';
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2403,4 +2374,5 @@ function PhotoEditor({
     </div>
   );
 }
+
 
