@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, ErrorInfo, useEffect } from 'react';
+﻿import React, { useState, useRef, useMemo, ErrorInfo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Camera, 
@@ -534,6 +534,7 @@ export default function App() {
   } = useSnapAudit();
 
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setUserScope(user?.id ?? null);
@@ -542,6 +543,12 @@ export default function App() {
       setCurrentSessionId(null);
     }
   }, [user?.id, user, setUserScope, setCurrentSessionId]);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const t = setTimeout(() => setToastMessage(null), 3000);
+    return () => clearTimeout(t);
+  }, [toastMessage]);
 
   // Load remote sessions + photo metadata when signed in.
   useEffect(() => {
@@ -713,6 +720,7 @@ export default function App() {
         const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
+        setToastMessage('Image saved');
         return;
       }
     } catch (e: any) {
@@ -729,6 +737,7 @@ export default function App() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setToastMessage('Image saved');
   };
 
   // Pre-fetch signed URLs for uploaded photos (keeps localStorage small by clearing imageData after sync).
@@ -1438,8 +1447,17 @@ export default function App() {
         </div>
 
         <footer className="mt-20 pt-8 border-t border-gray-200 dark:border-gray-800 text-center text-gray-400 dark:text-gray-500 text-sm print:mt-10">
-          Generated via SnapAudit • {new Date().toLocaleString()}
+          Generated via SnapAudit â€¢ {new Date().toLocaleString()}
         </footer>
+      </div>
+    );
+  };
+
+  const SavedToast = () => {
+    if (!toastMessage) return null;
+    return (
+      <div className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[200] px-4 py-3 rounded-2xl bg-gray-900/90 text-white text-sm font-bold shadow-2xl backdrop-blur-md border border-white/10">
+        {toastMessage}
       </div>
     );
   };
@@ -1523,6 +1541,7 @@ export default function App() {
 
           <ReportContent session={currentSession} sessionPhotos={currentPhotos} />
         </div>
+        <SavedToast />
       </div>
     );
   }
@@ -1560,6 +1579,8 @@ export default function App() {
           <p className="text-sm opacity-80">This may take a few moments</p>
         </div>
       )}
+
+      <SavedToast />
 
       {/* Header */}
       <header className="shrink-0 z-30 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-100 dark:border-gray-800 px-4 pt-safe pb-4 flex items-center justify-between">
@@ -2382,3 +2403,4 @@ function PhotoEditor({
     </div>
   );
 }
+
