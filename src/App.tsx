@@ -20,6 +20,7 @@ import {
   Cloud,
   CloudOff,
   Upload,
+  Download,
   Pencil,
   Sun,
   Moon,
@@ -648,6 +649,99 @@ export default function App() {
       console.error('Failed to create signed URL', e);
     }
     return null;
+  };
+
+  const getPhotoBlob = async (photo: PhotoEntry): Promise<Blob | null> => {
+    try {
+      if (photo.imageData) return dataUrlToBlob(photo.imageData);
+
+      if (user && photo.storagePath) {
+        const { data, error } = await supabase.storage.from('photos').download(photo.storagePath);
+        if (error) throw error;
+        return data ?? null;
+      }
+
+      if (photo.storagePath) {
+        const url = await ensureSignedUrl(photo);
+        if (url) {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`Failed to fetch photo blob (${res.status})`);
+          return await res.blob();
+        }
+      }
+
+      const src = getPhotoSrc(photo);
+      if (!src) return null;
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(`Failed to fetch photo blob (${res.status})`);
+      return await res.blob();
+    } catch (e) {
+      console.error('Failed to get photo blob', photo.id, e);
+      return null;
+    }
+  };
+
+  const savePhotoToDevice = async (photo: PhotoEntry) => {
+    const blob = await getPhotoBlob(photo);
+    if (!blob) return;
+
+    const contentType = blob.type || 'image/jpeg';
+    const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+    const tagPart = photo.tag.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'photo';
+    const datePart = new Date(photo.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const suggestedName = `snapaudit-${tagPart}-${datePart}.${ext}`;
+
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
+
+    try {
+      const file = new File([blob], suggestedName, { type: contentType });
+      const canShare = (navigator as any).canShare?.({ files: [file] });
+      if (isMobile && typeof (navigator as any).share === 'function' && canShare) {
+        await (navigator as any).share({ files: [file], title: 'SnapAudit Photo' });
+        return;
+      }
+    } catch (e: any) {
+      // Ignore user-cancel; fall back for other errors.
+      if (e?.name === 'AbortError') return;
+      console.warn('Share failed; falling back to download.', e);
+    }
+
+    try {
+      const picker = (window as any).showSaveFilePicker;
+      if (!isMobile && typeof picker === 'function') {
+        const handle = await picker({
+          suggestedName,
+          types: [
+            {
+              description: 'Image',
+              accept: {
+                'image/jpeg': ['.jpg', '.jpeg'],
+                'image/png': ['.png'],
+                'image/webp': ['.webp']
+              }
+            }
+          ]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      }
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+      console.warn('Save-as picker failed; falling back to download.', e);
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = suggestedName;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
   // Pre-fetch signed URLs for uploaded photos (keeps localStorage small by clearing imageData after sync).
@@ -1315,7 +1409,7 @@ export default function App() {
               <div className="flex flex-wrap gap-6">
                 {group.photos.map(photo => (
                   <div key={photo.id} className="flex gap-4 items-start break-inside-avoid w-full md:w-[calc(50%-12px)] print:w-full">
-                    <div className="shrink-0 w-[1.5in] h-[1.5in] bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden border border-gray-100 dark:border-gray-800 shadow-sm">
+                    <div className="relative shrink-0 w-[1.5in] h-[1.5in] bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden border border-gray-100 dark:border-gray-800 shadow-sm">
                       <img 
                         src={getPhotoSrc(photo)} 
                         alt={photo.tag} 
@@ -1329,6 +1423,20 @@ export default function App() {
                         className={`w-full h-full object-cover ${!isPrintOnly ? 'cursor-pointer active:scale-95 transition-transform' : ''}`}
                         referrerPolicy="no-referrer"
                       />
+                      {!isPrintOnly && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            vibrate(30);
+                            savePhotoToDevice(photo);
+                          }}
+                          aria-label="Save photo to device"
+                          title="Save to device"
+                          className="absolute top-1 left-1 p-1 bg-white/90 dark:bg-gray-900/80 text-blue-600 dark:text-blue-400 rounded-full shadow"
+                        >
+                          <Download size={14} />
+                        </button>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-gray-800 dark:text-gray-300 text-sm leading-relaxed italic">
@@ -1725,6 +1833,18 @@ export default function App() {
                                   {photo.tag}
                                 </span>
                               </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  vibrate(30);
+                                  savePhotoToDevice(photo);
+                                }}
+                                aria-label="Save photo to device"
+                                title="Save to device"
+                                className="absolute top-2 left-2 p-1.5 bg-white/90 dark:bg-gray-900/80 text-blue-600 dark:text-blue-400 rounded-full shadow-lg"
+                              >
+                                <Download size={12} />
+                              </button>
                               <button 
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -2107,7 +2227,7 @@ function TaggingOverlay({
   onSave: (tag: Tag, comment: string, imageData: string) => void, 
   onCancel: () => void 
 }) {
-  const [tag, setTag] = useState<Tag>('Product');
+  const [tag, setTag] = useState<Tag>('Other');
   const [comment, setComment] = useState('');
   const [imageData, setImageData] = useState(initialImageData);
   const [showMarkup, setShowMarkup] = useState(false);

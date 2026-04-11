@@ -1,6 +1,7 @@
 import { Tag } from './types';
 
 export const PRESET_TAGS: Tag[] = [
+  'Other',
   'Product',
   'Product Procedures',
   'Food Safety',
@@ -9,7 +10,6 @@ export const PRESET_TAGS: Tag[] = [
   'Repairs',
   'Brand Image',
   'Brand Safety',
-  'Other'
 ];
 
 export const STORAGE_KEYS = {
