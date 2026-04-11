@@ -695,19 +695,6 @@ export default function App() {
     const isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
 
     try {
-      const file = new File([blob], suggestedName, { type: contentType });
-      const canShare = (navigator as any).canShare?.({ files: [file] });
-      if (isMobile && typeof (navigator as any).share === 'function' && canShare) {
-        await (navigator as any).share({ files: [file], title: 'SnapAudit Photo' });
-        return;
-      }
-    } catch (e: any) {
-      // Ignore user-cancel; fall back for other errors.
-      if (e?.name === 'AbortError') return;
-      console.warn('Share failed; falling back to download.', e);
-    }
-
-    try {
       const picker = (window as any).showSaveFilePicker;
       if (!isMobile && typeof picker === 'function') {
         const handle = await picker({
