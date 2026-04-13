@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useMemo, ErrorInfo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, ErrorInfo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Camera, 
@@ -45,6 +45,14 @@ const vibrate = (pattern: number | number[] = 50) => {
   if (typeof navigator !== 'undefined' && navigator.vibrate) {
     navigator.vibrate(pattern);
   }
+};
+
+const isIosDevice = () => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/i.test(ua);
+  const iPadOS = ua.includes('Macintosh') && typeof document !== 'undefined' && 'ontouchend' in document;
+  return iOS || iPadOS;
 };
 
 // --- Components ---
@@ -535,6 +543,8 @@ export default function App() {
 
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const photoBlobCacheRef = useRef<Map<string, Blob>>(new Map());
+  const isIOS = useMemo(() => isIosDevice(), []);
 
   useEffect(() => {
     setUserScope(user?.id ?? null);
@@ -660,6 +670,8 @@ export default function App() {
 
   const getPhotoBlob = async (photo: PhotoEntry): Promise<Blob | null> => {
     try {
+      const cached = photoBlobCacheRef.current.get(photo.id);
+      if (cached) return cached;
       if (photo.imageData) return dataUrlToBlob(photo.imageData);
 
       if (user && photo.storagePath) {
@@ -688,16 +700,27 @@ export default function App() {
     }
   };
 
-  const savePhotoToDevice = async (photo: PhotoEntry) => {
-    const blob = await getPhotoBlob(photo);
-    if (!blob) return;
+  const cachePhotoBlob = (photoId: string, blob: Blob) => {
+    const cache = photoBlobCacheRef.current;
+    if (cache.has(photoId)) cache.delete(photoId);
+    cache.set(photoId, blob);
+    const maxEntries = 40;
+    if (cache.size > maxEntries) {
+      const oldestKey = cache.keys().next().value as string | undefined;
+      if (oldestKey) cache.delete(oldestKey);
+    }
+  };
 
-    const contentType = blob.type || 'image/jpeg';
-    const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
-    const tagPart = photo.tag.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'photo';
-    const datePart = new Date(photo.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    const suggestedName = `snapaudit-${tagPart}-${datePart}.${ext}`;
+  const prefetchPhotoBlob = (photo: PhotoEntry) => {
+    if (!isIOS) return;
+    if (photoBlobCacheRef.current.has(photo.id)) return;
+    void (async () => {
+      const blob = await getPhotoBlob(photo);
+      if (blob) cachePhotoBlob(photo.id, blob);
+    })();
+  };
 
+  const downloadBlobToDevice = (blob: Blob, suggestedName: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -708,7 +731,75 @@ export default function App() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-    setToastMessage('Image saved');
+  };
+
+  const savePhotoToDevice = (photo: PhotoEntry) => {
+    const tagPart = photo.tag.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'photo';
+    const datePart = new Date(photo.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+
+    const cachedBlob = photoBlobCacheRef.current.get(photo.id) ?? (photo.imageData ? dataUrlToBlob(photo.imageData) : null);
+    if (cachedBlob && !photoBlobCacheRef.current.has(photo.id)) {
+      cachePhotoBlob(photo.id, cachedBlob);
+    }
+
+    const contentType = cachedBlob?.type || 'image/jpeg';
+    const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+    const suggestedName = `snapaudit-${tagPart}-${datePart}.${ext}`;
+
+    if (isIOS) {
+      // iOS Safari often ignores `download` and navigates to a file preview.
+      // Use the Share sheet with a File when available to keep the user on this page.
+      if (!cachedBlob) {
+        setToastMessage('Preparing image… tap Save again');
+        void (async () => {
+          const blob = await getPhotoBlob(photo);
+          if (!blob) {
+            setToastMessage('Could not prepare image');
+            return;
+          }
+          cachePhotoBlob(photo.id, blob);
+          setToastMessage('Ready — tap Save again');
+        })();
+        return;
+      }
+
+      const file = new File([cachedBlob], suggestedName, { type: cachedBlob.type || 'image/jpeg' });
+      const nav = navigator as any;
+      const canShareFiles =
+        typeof nav.share === 'function' &&
+        (typeof nav.canShare !== 'function' || (() => {
+          try { return nav.canShare({ files: [file] }); } catch { return false; }
+        })());
+
+      if (canShareFiles) {
+        setToastMessage('Use Share → Save Image');
+        void nav.share({ files: [file], title: suggestedName }).catch(() => {});
+        return;
+      }
+
+      // Fallback: may still show a preview on iOS.
+      downloadBlobToDevice(cachedBlob, suggestedName);
+      setToastMessage('Image saved');
+      return;
+    }
+
+    if (cachedBlob) {
+      downloadBlobToDevice(cachedBlob, suggestedName);
+      setToastMessage('Image saved');
+      return;
+    }
+
+    setToastMessage('Preparing download…');
+    void (async () => {
+      const blob = await getPhotoBlob(photo);
+      if (!blob) {
+        setToastMessage('Could not download image');
+        return;
+      }
+      cachePhotoBlob(photo.id, blob);
+      downloadBlobToDevice(blob, suggestedName);
+      setToastMessage('Image saved');
+    })();
   };
 
   // Pre-fetch signed URLs for uploaded photos (keeps localStorage small by clearing imageData after sync).
@@ -1385,7 +1476,10 @@ export default function App() {
                             openPhotoEditor(photo, 'report');
                           }
                         }}
-                        onLoad={() => { if (!photo.imageData && photo.storagePath) ensureSignedUrl(photo); }}
+                        onLoad={() => {
+                          if (!photo.imageData && photo.storagePath) ensureSignedUrl(photo);
+                          prefetchPhotoBlob(photo);
+                        }}
                         crossOrigin="anonymous"
                         className={`w-full h-full object-cover ${!isPrintOnly ? 'cursor-pointer active:scale-95 transition-transform' : ''}`}
                         referrerPolicy="no-referrer"
@@ -1418,7 +1512,7 @@ export default function App() {
         </div>
 
         <footer className="mt-20 pt-8 border-t border-gray-200 dark:border-gray-800 text-center text-gray-400 dark:text-gray-500 text-sm print:mt-10">
-          Generated via SnapAudit â€¢ {new Date().toLocaleString()}
+          Generated via SnapAudit • {new Date().toLocaleString()}
         </footer>
       </div>
     );
@@ -1550,8 +1644,6 @@ export default function App() {
           <p className="text-sm opacity-80">This may take a few moments</p>
         </div>
       )}
-
-      <SavedToast />
 
       {/* Header */}
       <header className="shrink-0 z-30 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-100 dark:border-gray-800 px-4 pt-safe pb-4 flex items-center justify-between">
@@ -1803,7 +1895,10 @@ export default function App() {
                                 src={getPhotoSrc(photo)} 
                                 alt={photo.tag} 
                                 className="w-full h-full object-cover"
-                                onLoad={() => { if (!photo.imageData && photo.storagePath) ensureSignedUrl(photo); }}
+                                onLoad={() => {
+                                  if (!photo.imageData && photo.storagePath) ensureSignedUrl(photo);
+                                  prefetchPhotoBlob(photo);
+                                }}
                                 crossOrigin="anonymous"
                                 referrerPolicy="no-referrer"
                               />
@@ -2070,6 +2165,8 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      <SavedToast />
     </div>
   );
 }
@@ -2374,5 +2471,3 @@ function PhotoEditor({
     </div>
   );
 }
-
-
