@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, ErrorInfo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Camera, 
@@ -32,7 +32,7 @@ import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useSnapAudit } from './hooks/useSnapAudit';
 import { useAuth } from './hooks/useAuth';
-import { PRESET_TAGS } from './constants';
+import { PRESET_TAGS, HAPTIC, TIMING, CACHE, PAGINATION, DATE_FORMAT, STORAGE_KEYS } from './constants';
 import { Tag, PhotoEntry, Session, View } from './types';
 import { resizeImage } from './utils/image';
 import { MarkupEditor } from './components/MarkupEditor';
@@ -41,7 +41,7 @@ import { dataUrlToBlob, blobToDataUrl } from './utils/dataUrl';
 
 // --- Helpers ---
 
-const vibrate = (pattern: number | number[] = 50) => {
+const vibrate = (pattern: number | number[] = HAPTIC.CARD_SWIPE) => {
   if (typeof navigator !== 'undefined' && navigator.vibrate) {
     navigator.vibrate(pattern);
   }
@@ -84,7 +84,7 @@ const Button = ({
   return (
     <button 
       onClick={() => {
-        if (variant === 'primary' || variant === 'danger') vibrate(40);
+        if (variant === 'primary' || variant === 'danger') vibrate(HAPTIC.BUTTON_PRESS);
         onClick?.();
       }} 
       disabled={disabled}
@@ -124,7 +124,7 @@ const BottomNav = ({
       
       <div className="relative -top-6">
         <button 
-          onClick={() => { vibrate(70); onNewSession(); }}
+          onClick={() => { vibrate(HAPTIC.NEW_SESSION); onNewSession(); }}
           className="w-16 h-16 bg-blue-600 text-white rounded-full shadow-xl shadow-blue-200 dark:shadow-none flex items-center justify-center active:scale-90 transition-transform border-4 border-white dark:border-gray-900"
         >
           <Plus size={32} />
@@ -270,8 +270,8 @@ function HistoryCard({
 
   const handleTouchMove = (e: React.TouchEvent) => {
     const diff = startX.current - e.touches[0].clientX;
-    if (diff > 50) setIsSwiped(true);
-    if (diff < -50) setIsSwiped(false);
+    if (diff > HAPTIC.CARD_SWIPE) setIsSwiped(true);
+    if (diff < -HAPTIC.CARD_SWIPE) setIsSwiped(false);
   };
 
   return (
@@ -324,15 +324,26 @@ function HistoryCard({
           </div>
         </div>
         
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <button 
             onClick={(e) => {
               e.stopPropagation();
               onEdit();
             }}
             className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+            aria-label="Edit session"
           >
             <Pencil size={18} />
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+            aria-label="Delete session"
+          >
+            <Trash2 size={18} />
           </button>
           <div className="text-gray-300">
             <ChevronLeft size={20} className="rotate-180" />
@@ -350,7 +361,8 @@ function HistoryView({
   onDeleteSession,
   stores,
   filter,
-  setFilter
+  setFilter,
+  onGoHome
 }: { 
   sessions: Session[], 
   onOpenReport: (session: Session) => void,
@@ -358,7 +370,8 @@ function HistoryView({
   onDeleteSession: (session: Session) => void,
   stores: string[],
   filter: { startDate: string, endDate: string, selectedStores: string[] },
-  setFilter: (f: any) => void
+  setFilter: (f: any) => void,
+  onGoHome: () => void
 }) {
   const [showStoreFilter, setShowStoreFilter] = useState(false);
 
@@ -393,7 +406,7 @@ function HistoryView({
   const hasActiveFilters = filter.startDate || filter.endDate || filter.selectedStores.length > 0;
 
   const clearFilters = () => {
-    vibrate(30);
+    vibrate(HAPTIC.SUCCESS);
     setFilter({
       startDate: '',
       endDate: '',
@@ -494,7 +507,14 @@ function HistoryView({
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
             <History size={48} className="mb-4 opacity-20" />
             <p className="font-medium">No sessions found</p>
-            <p className="text-sm">Try adjusting your filters</p>
+            <p className="text-sm mb-4">Try adjusting your filters</p>
+            <button 
+              onClick={() => { vibrate(HAPTIC.MEDIUM); onGoHome(); }}
+              className="text-blue-600 font-semibold text-sm flex items-center gap-1"
+            >
+              <Home size={16} />
+              Go to Home
+            </button>
           </div>
         ) : (
           <div className="space-y-4">
@@ -518,7 +538,7 @@ function HistoryView({
 
 export default function App() {
   const { user, isLoading: authLoading } = useAuth();
-  const { 
+const { 
     sessions, 
     photos,
     currentSessionId, 
@@ -537,6 +557,7 @@ export default function App() {
     stores,
     addStore,
     clearAllData,
+    clearPhotos,
     setUserScope,
     mergeRemote
   } = useSnapAudit();
@@ -556,7 +577,7 @@ export default function App() {
 
   useEffect(() => {
     if (!toastMessage) return;
-    const t = setTimeout(() => setToastMessage(null), 3000);
+const t = setTimeout(() => setToastMessage(null), TIMING.TOAST_DURATION);
     return () => clearTimeout(t);
   }, [toastMessage]);
 
@@ -569,7 +590,7 @@ export default function App() {
           .from('sessions')
           .select('id,title,location,created_at')
           .order('created_at', { ascending: false })
-          .limit(500);
+          .limit(PAGINATION.SESSIONS_LIMIT);
         if (sErr) throw sErr;
 
         const remoteSessions: Session[] = (sessionRows ?? []).map((r: any) => ({
@@ -583,7 +604,7 @@ export default function App() {
           .from('photos')
           .select('id,session_id,tag,comment,storage_path,created_at')
           .order('created_at', { ascending: false })
-          .limit(2000);
+          .limit(PAGINATION.PHOTOS_LIMIT);
         if (pErr) throw pErr;
 
         const remotePhotos: PhotoEntry[] = (photoRows ?? []).map((r: any) => ({
@@ -620,11 +641,23 @@ export default function App() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [lastView, setLastView] = useState<View>('home');
   const [shareMenuSession, setShareMenuSession] = useState<{session: Session, photos: PhotoEntry[]} | null>(null);
-  const [historyFilter, setHistoryFilter] = useState({
-    startDate: '',
-    endDate: '',
-    selectedStores: [] as string[]
+  const [historyFilter, setHistoryFilter] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEYS.HISTORY_FILTER);
+        return saved ? JSON.parse(saved) : { startDate: '', endDate: '', selectedStores: [] as string[] };
+      } catch {
+        return { startDate: '', endDate: '', selectedStores: [] as string[] };
+      }
+    }
+    return { startDate: '', endDate: '', selectedStores: [] as string[] };
   });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEYS.HISTORY_FILTER, JSON.stringify(historyFilter));
+    }
+  }, [historyFilter]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -704,8 +737,7 @@ export default function App() {
     const cache = photoBlobCacheRef.current;
     if (cache.has(photoId)) cache.delete(photoId);
     cache.set(photoId, blob);
-    const maxEntries = 40;
-    if (cache.size > maxEntries) {
+    if (cache.size > CACHE.MAX_PHOTO_BLOB_ENTRIES) {
       const oldestKey = cache.keys().next().value as string | undefined;
       if (oldestKey) cache.delete(oldestKey);
     }
@@ -730,7 +762,76 @@ export default function App() {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setTimeout(() => URL.revokeObjectURL(url), TIMING.BLOB_URL_REVOKE);
+  };
+
+  const savePhotoToDevice = (photo: PhotoEntry) => {
+    const tagPart = photo.tag.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'photo';
+    const datePart = new Date(photo.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+
+    const cachedBlob = photoBlobCacheRef.current.get(photo.id) ?? (photo.imageData ? dataUrlToBlob(photo.imageData) : null);
+    if (cachedBlob && !photoBlobCacheRef.current.has(photo.id)) {
+      cachePhotoBlob(photo.id, cachedBlob);
+    }
+
+    const contentType = cachedBlob?.type || 'image/jpeg';
+    const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+    const suggestedName = `snapaudit-${tagPart}-${datePart}.${ext}`;
+
+    if (isIOS) {
+      // iOS Safari often ignores `download` and navigates to a file preview.
+      // Use the Share sheet with a File when available to keep the user on this page.
+      if (!cachedBlob) {
+        setToastMessage('Preparing image… tap Save again');
+        void (async () => {
+          const blob = await getPhotoBlob(photo);
+          if (!blob) {
+            setToastMessage('Could not prepare image');
+            return;
+          }
+          cachePhotoBlob(photo.id, blob);
+          setToastMessage('Ready — tap Save again');
+        })();
+        return;
+      }
+
+      const file = new File([cachedBlob], suggestedName, { type: cachedBlob.type || 'image/jpeg' });
+      const nav = navigator as any;
+      const canShareFiles =
+        typeof nav.share === 'function' &&
+        (typeof nav.canShare !== 'function' || (() => {
+          try { return nav.canShare({ files: [file] }); } catch { return false; }
+        })());
+
+      if (canShareFiles) {
+        setToastMessage('Use Share → Save Image');
+        void nav.share({ files: [file], title: suggestedName }).catch(() => {});
+        return;
+      }
+
+      // Fallback: may still show a preview on iOS.
+      downloadBlobToDevice(cachedBlob, suggestedName);
+      setToastMessage('Image saved');
+      return;
+    }
+
+    if (cachedBlob) {
+      downloadBlobToDevice(cachedBlob, suggestedName);
+      setToastMessage('Image saved');
+      return;
+    }
+
+    setToastMessage('Preparing download…');
+    void (async () => {
+      const blob = await getPhotoBlob(photo);
+      if (!blob) {
+        setToastMessage('Could not download image');
+        return;
+      }
+      cachePhotoBlob(photo.id, blob);
+      downloadBlobToDevice(blob, suggestedName);
+      setToastMessage('Image saved');
+    })();
   };
 
   const savePhotoToDevice = (photo: PhotoEntry) => {
@@ -872,7 +973,7 @@ export default function App() {
     };
 
     if (isOnline && user) {
-      const timer = setTimeout(syncPhotos, 2000); // Wait 2s before starting sync
+      const timer = setTimeout(syncPhotos, TIMING.SYNC_DELAY);
       return () => clearTimeout(timer);
     }
   }, [photos, isOnline, isSyncing, markAsSynced, setIsSyncing, sessions, user]);
@@ -880,7 +981,7 @@ export default function App() {
   const [view, setView] = useState<'home' | 'session' | 'photo-edit' | 'report'>('home');
   const [editingPhoto, setEditingPhoto] = useState<PhotoEntry | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<{ title: string, message: string, onConfirm: () => void } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ title: string, message: string, onConfirm: () => void, variant?: 'danger' | 'warning' } | null>(null);
   
   // New session form state
   const [newSessionStore, setNewSessionStore] = useState('');
@@ -892,14 +993,14 @@ export default function App() {
   useEffect(() => {
     if (newSessionStore) {
       const date = new Date();
+      const yyyy = String(date.getFullYear());
       const mm = String(date.getMonth() + 1).padStart(2, '0');
       const dd = String(date.getDate()).padStart(2, '0');
-      const yy = String(date.getFullYear()).slice(-2);
-      setNewSessionTitle(`${mm}/${dd}/${yy}-${newSessionStore}`);
+      setNewSessionTitle(`${yyyy}/${mm}/${dd}-${newSessionStore}`);
     }
   }, [newSessionStore]);
   
-  // Wake Lock to keep screen on during audit
+  // Wake Lock to keep screen on during audit and photo tagging
   useEffect(() => {
     let wakeLock: any = null;
     const requestWakeLock = async () => {
@@ -912,7 +1013,7 @@ export default function App() {
       }
     };
 
-    if (view === 'session') {
+    if (view === 'session' || capturedImage) {
       requestWakeLock();
     }
 
@@ -921,14 +1022,14 @@ export default function App() {
         wakeLock.release().catch(() => {});
       }
     };
-  }, [view]);
+  }, [view, capturedImage]);
 
   const uploadImageInputRef = useRef<HTMLInputElement>(null);
 
   const handlePickedFile = (file: File) => {
     if (!file.type.startsWith('image/')) return;
 
-    vibrate(50);
+    vibrate(HAPTIC.SUCCESS);
     const reader = new FileReader();
     reader.onloadend = async () => {
       try {
@@ -988,7 +1089,7 @@ export default function App() {
   const handleNewSession = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (newSessionTitle.trim()) {
-      vibrate(70);
+      vibrate(HAPTIC.NEW_SESSION);
       createSession(newSessionTitle, newSessionStore);
       setIsCreatingSession(false);
       setNewSessionStore('');
@@ -999,7 +1100,11 @@ export default function App() {
 
   const handleAddCustomStore = () => {
     if (customStoreNumber && customStoreNumber.length === 4) {
-      vibrate(50);
+      if (stores.includes(customStoreNumber)) {
+        setToastMessage('Store number already exists');
+        return;
+      }
+      vibrate(HAPTIC.SUCCESS);
       addStore(customStoreNumber);
       setNewSessionStore(customStoreNumber);
       setIsAddingNewStore(false);
@@ -1016,7 +1121,7 @@ export default function App() {
   };
 
   const handleSavePhoto = (tag: Tag, comment: string, imageData: string) => {
-    vibrate(60);
+    vibrate(HAPTIC.HEAVY);
     if (capturedImage && currentSessionId) {
       addPhoto(currentSessionId, imageData, tag, comment);
       setCapturedImage(null);
@@ -1042,18 +1147,23 @@ export default function App() {
         }
       } catch (e) {
         console.error('Failed to download photo for editing', e);
+        setToastMessage('Failed to load photo for editing. Please try again.');
+        return;
       }
     }
 
-    if (!photo.imageData) return;
-    vibrate(30);
+    if (!photo.imageData) {
+      setToastMessage('No image data available. Please capture a new photo.');
+      return;
+    }
+    vibrate(HAPTIC.SUCCESS);
     setEditingPhoto(photo);
     setLastView(fromView);
     setView('photo-edit');
   };
 
   const handleShareSession = (session: Session) => {
-    vibrate(50);
+    vibrate(HAPTIC.SUCCESS);
     const sessionPhotos = photos.filter(p => p.sessionId === session.id);
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     if (isMobile) {
@@ -1064,7 +1174,7 @@ export default function App() {
   };
 
   const handlePrint = () => {
-    vibrate(50);
+    vibrate(HAPTIC.SUCCESS);
     window.print();
   };
 
@@ -1107,7 +1217,7 @@ export default function App() {
   };
 
   const deleteSessionEverywhere = async (sessionId: string) => {
-    vibrate([50, 50, 50]);
+    vibrate(HAPTIC.DELETE);
     deleteSession(sessionId);
     await deleteSessionRemote(sessionId);
   };
@@ -1118,7 +1228,7 @@ export default function App() {
     action: 'native' | 'email' | 'print' | 'download' = 'native'
   ) => {
     try {
-      vibrate(50);
+      vibrate(HAPTIC.SUCCESS);
       setIsGeneratingPdf(true);
       const pdfBackground = '#ffffff';
       const pdfText = '#111827';
@@ -1488,7 +1598,7 @@ export default function App() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            vibrate(30);
+                            vibrate(HAPTIC.SUCCESS);
                             savePhotoToDevice(photo);
                           }}
                           aria-label="Save photo to device"
@@ -1500,7 +1610,7 @@ export default function App() {
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-gray-800 dark:text-gray-300 text-sm leading-relaxed italic">
+                      <p className="text-gray-800 dark:text-gray-300 text-sm leading-relaxed italic break-words">
                         "{photo.comment || 'No comment provided.'}"
                       </p>
                     </div>
@@ -1521,7 +1631,11 @@ export default function App() {
   const SavedToast = () => {
     if (!toastMessage) return null;
     return (
-      <div className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[200] px-4 py-3 rounded-2xl bg-gray-900/90 text-white text-sm font-bold shadow-2xl backdrop-blur-md border border-white/10">
+      <div
+        role="status"
+        aria-live="polite"
+        className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[200] px-4 py-3 rounded-2xl bg-gray-900/90 text-white text-sm font-bold shadow-2xl backdrop-blur-md border border-white/10"
+      >
         {toastMessage}
       </div>
     );
@@ -1531,8 +1645,9 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="h-full flex items-center justify-center bg-gray-50 dark:bg-gray-950 text-gray-500">
-        Loading...
+      <div className="h-full flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950 text-gray-500 gap-4">
+        <RefreshCw className="animate-spin" size={32} />
+        <span>Loading SnapAudit...</span>
       </div>
     );
   }
@@ -1550,12 +1665,12 @@ export default function App() {
           filter={historyFilter}
           setFilter={setHistoryFilter}
           onOpenReport={(session) => {
-            vibrate(50);
+            vibrate(HAPTIC.SUCCESS);
             setCurrentSessionId(session.id);
             setView('report');
           }}
           onEditSession={(session) => {
-            vibrate(50);
+            vibrate(HAPTIC.SUCCESS);
             setCurrentSessionId(session.id);
             setView('session');
           }}
@@ -1566,6 +1681,7 @@ export default function App() {
               onConfirm: () => { deleteSessionEverywhere(session.id); }
             });
           }}
+          onGoHome={() => setView('home')}
         />
         <BottomNav 
           activeView={view} 
@@ -1584,7 +1700,7 @@ export default function App() {
           <div className="flex flex-col gap-4 mb-8 print:hidden">
             <Button 
               variant="ghost"
-              onClick={() => { vibrate(30); setView('home'); }}
+              onClick={() => { vibrate(HAPTIC.SUCCESS); setView('home'); }}
               className="flex items-center gap-2 self-start"
             >
               <Home size={20} />
@@ -1617,7 +1733,7 @@ export default function App() {
         initialData={editingPhoto!}
         onSave={handleSavePhoto}
         onCancel={() => {
-          vibrate(30);
+          vibrate(HAPTIC.SUCCESS);
           setEditingPhoto(null);
           setView(lastView);
         }}
@@ -1672,7 +1788,7 @@ export default function App() {
             Sign out
           </button>
           <button 
-            onClick={() => { vibrate(30); setIsDarkMode(!isDarkMode); }}
+            onClick={() => { vibrate(HAPTIC.SUCCESS); setIsDarkMode(!isDarkMode); }}
             className="p-2 text-gray-400 dark:text-gray-500 hover:text-blue-500 transition-colors"
           >
             {isDarkMode ? <Sun size={20} className="text-yellow-500" /> : <Moon size={20} />}
@@ -1697,18 +1813,19 @@ export default function App() {
                 variant="danger" 
                 className="py-1 px-3 text-[10px]" 
                 onClick={() => {
-                  vibrate(50);
+                  vibrate(HAPTIC.SUCCESS);
                   setConfirmAction({
-                    title: 'Clear All Data',
-                    message: 'This will delete ALL sessions and photos. This action cannot be undone.',
-                    onConfirm: clearAllData
+                    title: 'Clear Data',
+                    message: 'How would you like to clear data?',
+                    onConfirm: () => {},
+                    variant: 'warning'
                   });
                 }}
               >
-                Clear All Data
+                Clear Data
               </Button>
             </div>
-            <button onClick={() => { vibrate(30); setStorageError(null); }} className="text-red-400">
+            <button onClick={() => { vibrate(HAPTIC.SUCCESS); setStorageError(null); }} className="text-red-400">
               <X size={16} />
             </button>
           </motion.div>
@@ -1739,7 +1856,7 @@ export default function App() {
                     </div>
                     <p className="text-gray-500 dark:text-gray-400 font-medium">No sessions yet</p>
                     <button 
-                      onClick={() => { vibrate(50); setIsCreatingSession(true); }}
+                      onClick={() => { vibrate(HAPTIC.SUCCESS); setIsCreatingSession(true); }}
                       className="text-blue-600 font-semibold mt-1"
                     >
                       Start your first audit
@@ -1765,7 +1882,7 @@ export default function App() {
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
-                            vibrate(50);
+                            vibrate(HAPTIC.SUCCESS);
                             setConfirmAction({
                               title: 'Delete Session',
                               message: 'Are you sure you want to delete this session and all its photos? This action cannot be undone.',
@@ -1818,19 +1935,19 @@ export default function App() {
             >
               <CameraView 
                 onCapture={(data) => {
-                  vibrate(100);
+                  vibrate(HAPTIC.LONG);
                   setCapturedImage(data);
                 }}
                 onDone={() => {
-                  vibrate(50);
+                  vibrate(HAPTIC.SUCCESS);
                   setView('report');
                 }}
                 onShowPhotos={() => {
-                  vibrate(30);
+                  vibrate(HAPTIC.SUCCESS);
                   setShowPhotosList(true);
                 }}
                 onUpload={() => {
-                  vibrate(30);
+                  vibrate(HAPTIC.SUCCESS);
                   pickFromFiles();
                 }}
               />
@@ -1910,7 +2027,7 @@ export default function App() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  vibrate(30);
+                                  vibrate(HAPTIC.SUCCESS);
                                   savePhotoToDevice(photo);
                                 }}
                                 aria-label="Save photo to device"
@@ -1922,11 +2039,11 @@ export default function App() {
                               <button 
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  vibrate(50);
+                                  vibrate(HAPTIC.SUCCESS);
                                   setConfirmAction({
                                     title: 'Delete Photo',
                                     message: 'Are you sure you want to delete this photo?',
-                                    onConfirm: () => { vibrate([50, 50, 50]); deletePhoto(photo.id); }
+                                    onConfirm: () => { vibrate(HAPTIC.DELETE); deletePhoto(photo.id); }
                                   });
                                 }}
                                 className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full shadow-lg"
@@ -2029,7 +2146,7 @@ export default function App() {
                   className="w-full flex items-center gap-4 p-4 rounded-2xl bg-gray-50 dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400 transition-all group"
                 >
                   <div className="w-12 h-12 rounded-xl bg-white dark:bg-gray-700 flex items-center justify-center shadow-sm group-hover:shadow-md transition-all">
-                    <Upload className="rotate-180" size={24} />
+                    <Download size={24} />
                   </div>
                   <div className="text-left">
                     <div className="font-bold">Download PDF</div>
@@ -2049,7 +2166,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => { vibrate(30); setIsCreatingSession(false); }}
+              onClick={() => { vibrate(HAPTIC.SUCCESS); setIsCreatingSession(false); }}
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             />
             <motion.div 
@@ -2060,7 +2177,7 @@ export default function App() {
             >
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-bold dark:text-white">New Audit Session</h3>
-                <button onClick={() => { vibrate(30); setIsCreatingSession(false); }} className="p-2 text-gray-400 dark:text-gray-500">
+                <button onClick={() => { vibrate(HAPTIC.SUCCESS); setIsCreatingSession(false); }} className="p-2 text-gray-400 dark:text-gray-500">
                   <X size={24} />
                 </button>
               </div>
@@ -2088,7 +2205,7 @@ export default function App() {
                     <div className="flex gap-2">
                       <select 
                         value={newSessionStore}
-                        onChange={(e) => { vibrate(30); setNewSessionStore(e.target.value); }}
+                        onChange={(e) => { vibrate(HAPTIC.SUCCESS); setNewSessionStore(e.target.value); }}
                         className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none bg-white dark:bg-gray-800 font-bold text-gray-700 dark:text-gray-200 appearance-none"
                       >
                         <option value="" disabled>Select a store...</option>
@@ -2098,7 +2215,7 @@ export default function App() {
                       </select>
                       <button
                         type="button"
-                        onClick={() => { vibrate(50); setIsAddingNewStore(true); }}
+                        onClick={() => { vibrate(HAPTIC.SUCCESS); setIsAddingNewStore(true); }}
                         className="w-12 h-12 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-800 text-gray-400 dark:text-gray-500 flex items-center justify-center hover:border-blue-300 hover:text-blue-400 transition-all shrink-0"
                       >
                         <Plus size={20} />
@@ -2112,7 +2229,7 @@ export default function App() {
                       value={newSessionTitle}
                       onChange={(e) => setNewSessionTitle(e.target.value)}
                       required 
-                      placeholder="MM/DD/YY-XXXX" 
+                      placeholder="YYYY/MM/DD - XXXX" 
                       className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-800 dark:text-white"
                     />
                   </div>
@@ -2127,7 +2244,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Confirmation Modal */}
+{/* Confirmation Modal */}
       <AnimatePresence>
         {confirmAction && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -2135,7 +2252,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => { vibrate(30); setConfirmAction(null); }}
+              onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             />
             <motion.div 
@@ -2144,23 +2261,54 @@ export default function App() {
               exit={{ opacity: 0, scale: 0.9 }}
               className="relative w-full max-w-xs bg-white dark:bg-gray-900 rounded-3xl p-6 shadow-2xl text-center"
             >
-              <div className="w-12 h-12 bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Trash2 size={24} />
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${
+                confirmAction.variant === 'warning' 
+                  ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-500 dark:text-orange-400' 
+                  : 'bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400'
+              }`}>
+                {confirmAction.variant === 'warning' ? <Settings size={24} /> : <Trash2 size={24} />}
               </div>
               <h3 className="text-lg font-bold mb-2 dark:text-white">{confirmAction.title}</h3>
               <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">{confirmAction.message}</p>
-              <div className="flex gap-3">
-                <Button variant="ghost" fullWidth onClick={() => { vibrate(30); setConfirmAction(null); }}>
-                  Cancel
-                </Button>
-                <Button variant="danger" fullWidth onClick={() => {
-                  vibrate([50, 50, 50]);
-                  confirmAction.onConfirm();
-                  setConfirmAction(null);
-                }}>
-                  Delete
-                </Button>
-              </div>
+              {confirmAction.variant === 'warning' ? (
+                <div className="flex flex-col gap-3">
+                  <Button variant="primary" fullWidth onClick={() => {
+                    vibrate(HAPTIC.DELETE);
+                    setConfirmAction({
+                      title: 'Clear All Data',
+                      message: 'This will delete ALL sessions and photos. This action cannot be undone.',
+                      onConfirm: clearAllData,
+                      variant: 'danger'
+                    });
+                  }}>
+                    Clear All Data
+                  </Button>
+                  <Button variant="secondary" fullWidth onClick={() => {
+                    vibrate(HAPTIC.MEDIUM);
+                    clearPhotos();
+                    setConfirmAction(null);
+                    setToastMessage('All photos cleared');
+                  }}>
+                    Clear Photos Only
+                  </Button>
+                  <Button variant="ghost" fullWidth onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-3">
+                  <Button variant="ghost" fullWidth onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}>
+                    Cancel
+                  </Button>
+                  <Button variant="danger" fullWidth onClick={() => {
+                    vibrate(HAPTIC.DELETE);
+                    confirmAction.onConfirm();
+                    setConfirmAction(null);
+                  }}>
+                    Delete
+                  </Button>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
@@ -2188,6 +2336,7 @@ function CameraView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -2214,8 +2363,15 @@ function CameraView({
         if (videoRef.current) {
           videoRef.current.srcObject = s;
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error accessing camera:", err);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setCameraError('Camera access denied. Please enable camera permissions or upload a photo instead.');
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          setCameraError('No camera found. Please connect a camera or upload a photo.');
+        } else {
+          setCameraError('Failed to access camera. Please try again or upload a photo.');
+        }
       }
     }
     startCamera();
@@ -2230,6 +2386,22 @@ function CameraView({
       }
     };
   }, []);
+
+  if (cameraError) {
+    return (
+      <div className="h-full w-full flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-900 p-8 text-center">
+        <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mb-4">
+          <Camera size={32} className="text-red-500 dark:text-red-400" />
+        </div>
+        <p className="text-gray-700 dark:text-gray-300 mb-6 max-w-sm">{cameraError}</p>
+        <div className="flex flex-col gap-3 w-full max-w-xs">
+          <Button onClick={() => setCameraError(null)}>Try Again</Button>
+          <Button variant="outline" onClick={onUpload}>Upload Photo Instead</Button>
+          <Button variant="ghost" onClick={onDone}>Cancel</Button>
+        </div>
+      </div>
+    );
+  }
 
   const capture = () => {
     if (videoRef.current && canvasRef.current) {
@@ -2350,7 +2522,7 @@ function TaggingOverlay({
             <label className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2 block">Category</label>
             <select
               value={tag}
-              onChange={(e) => { vibrate(20); setTag(e.target.value as Tag); }}
+              onChange={(e) => { vibrate(HAPTIC.LIGHT); setTag(e.target.value as Tag); }}
               className="w-full bg-gray-50 dark:bg-black border-2 border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3.5 text-sm font-bold text-gray-700 dark:text-gray-100 focus:border-blue-500 focus:bg-white dark:focus:bg-black outline-none transition-all appearance-none"
             >
               {PRESET_TAGS.map(t => (
@@ -2410,11 +2582,11 @@ function PhotoEditor({
   return (
     <div className="fixed inset-0 z-50 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col">
       <div className="p-4 flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pt-safe bg-white dark:bg-gray-950">
-        <Button variant="ghost" onClick={() => { vibrate(30); onCancel(); }}>
+        <Button variant="ghost" onClick={() => { vibrate(HAPTIC.SUCCESS); onCancel(); }}>
           <X size={24} />
         </Button>
         <h2 className="font-bold text-lg">Edit Entry</h2>
-        <Button variant="ghost" onClick={() => { vibrate(60); onSave(tag, comment, imageData); }} className="text-blue-600">
+        <Button variant="ghost" onClick={() => { vibrate(HAPTIC.HEAVY); onSave(tag, comment, imageData); }} className="text-blue-600">
           <Check size={24} />
         </Button>
       </div>
@@ -2441,7 +2613,7 @@ function PhotoEditor({
             <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Select Category</label>
             <select
               value={tag}
-              onChange={(e) => { vibrate(30); setTag(e.target.value as Tag); }}
+              onChange={(e) => { vibrate(HAPTIC.SUCCESS); setTag(e.target.value as Tag); }}
               className="w-full bg-white dark:bg-black border-2 border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3.5 text-sm font-bold text-gray-700 dark:text-gray-100 focus:border-blue-500 outline-none transition-all appearance-none"
             >
               {PRESET_TAGS.map(t => (
@@ -2464,7 +2636,7 @@ function PhotoEditor({
       </div>
 
       <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-950 pb-safe">
-        <Button fullWidth onClick={() => { vibrate(60); onSave(tag, comment, imageData); }}>
+        <Button fullWidth onClick={() => { vibrate(HAPTIC.HEAVY); onSave(tag, comment, imageData); }}>
           Save Changes
         </Button>
       </div>

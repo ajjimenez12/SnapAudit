@@ -187,6 +187,13 @@ export function useSnapAudit() {
     }
   }, [isStorageAvailable, activeUserId, storageKey]);
 
+  const clearPhotos = useCallback(() => {
+    setPhotos([]);
+    if (isStorageAvailable && activeUserId) {
+      localStorage.removeItem(storageKey(STORAGE_KEYS.PHOTOS, activeUserId));
+    }
+  }, [isStorageAvailable, activeUserId, storageKey]);
+
   const setUserScope = useCallback((userId: string | null) => {
     setActiveUserId(userId);
     if (!isStorageAvailable) return;
@@ -282,5 +289,6 @@ export function useSnapAudit() {
     getSessionPhotos,
     addStore,
     clearAllData,
+    clearPhotos,
   };
 }
