@@ -28,8 +28,6 @@ import {
   Search,
   ChevronDown
 } from 'lucide-react';
-import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
 import { useSnapAudit } from './hooks/useSnapAudit';
 import { useAuth } from './hooks/useAuth';
 import { PRESET_TAGS, HAPTIC, TIMING, CACHE, PAGINATION, DATE_FORMAT, STORAGE_KEYS } from './constants';
@@ -1161,6 +1159,10 @@ const t = setTimeout(() => setToastMessage(null), TIMING.TOAST_DURATION);
     try {
       vibrate(HAPTIC.SUCCESS);
       setIsGeneratingPdf(true);
+      const [{ jsPDF }, { default: html2canvas }] = await Promise.all([
+        import('jspdf'),
+        import('html2canvas'),
+      ]);
       const pdfBackground = '#ffffff';
       const pdfText = '#111827';
       let avoidBreakRects: Array<{ top: number; bottom: number }> = [];
