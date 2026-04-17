@@ -1163,6 +1163,9 @@ export default function App() {
         import('jspdf'),
         import('html2canvas'),
       ]);
+      // Let React flush the hidden ReportContent (isPrintOnly) into the DOM
+      // before we search for it — without this, report-to-print may not exist yet.
+      await new Promise(r => setTimeout(r, 150));
       const pdfBackground = '#ffffff';
       const pdfText = '#111827';
       let avoidBreakRects: Array<{ top: number; bottom: number }> = [];
@@ -1650,6 +1653,15 @@ export default function App() {
   if (view === 'report' && currentSession) {
     return (
       <div className="h-screen overflow-y-auto bg-white dark:bg-gray-950">
+        {/* Hidden off-screen report for html2canvas — positioned outside the
+            scrollable container so the full document height is captured. */}
+        {isGeneratingPdf && (
+          <ReportContent
+            session={currentSession}
+            sessionPhotos={currentPhotos}
+            isPrintOnly={true}
+          />
+        )}
         {isGeneratingPdf && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center flex-col gap-4 text-white">
             <RefreshCw className="animate-spin" size={48} />
