@@ -1168,13 +1168,26 @@ export default function App() {
       let avoidBreakRects: Array<{ top: number; bottom: number }> = [];
       let reportHeightCssPx: number | null = null;
 
-      // Ensure remote photos have a signed URL before rendering the report for html2canvas.
-      const needsUrls = photosToPrint.filter(p => !p.imageData && p.storagePath);
-      if (needsUrls.length > 0) {
-        await Promise.all(needsUrls.map(p => ensureSignedUrl(p)));
-        await new Promise((r) => setTimeout(r, 150));
-      }
-      
+      // Pre-fetch all photos as data URLs so html2canvas never has to make
+      // network requests for images (avoids CORS hangs on Supabase signed URLs).
+      const photoDataUrlMap = new Map<string, string>();
+      await Promise.all(photosToPrint.map(async (photo) => {
+        try {
+          const src = photo.imageData || photoUrls[photo.id] || '';
+          if (!src) return;
+          if (src.startsWith('data:')) {
+            photoDataUrlMap.set(src, src);
+            return;
+          }
+          const blob = await getPhotoBlob(photo);
+          if (!blob) return;
+          const dataUrl = await blobToDataUrl(blob);
+          photoDataUrlMap.set(src, dataUrl);
+        } catch (e) {
+          console.warn('Failed to pre-fetch photo for PDF', photo.id, e);
+        }
+      }));
+
       // Ensure the element is rendered and visible for html2canvas
       const element = document.getElementById('report-to-print') || document.getElementById('report-view');
       if (!element) {
@@ -1186,11 +1199,21 @@ export default function App() {
 
       const canvas = await html2canvas(element, {
         scale: 2,
-        useCORS: true,
+        useCORS: false,
+        allowTaint: true,
         logging: false,
         backgroundColor: pdfBackground,
-        windowWidth: 800, // Consistent width for PDF generation
+        windowWidth: 800,
         onclone: (clonedDoc) => {
+          // Replace remote image srcs with pre-fetched data URLs so html2canvas
+          // doesn't need CORS access to Supabase storage.
+          clonedDoc.querySelectorAll('img').forEach((img: HTMLImageElement) => {
+            const dataUrl = photoDataUrlMap.get(img.src);
+            if (dataUrl) {
+              img.src = dataUrl;
+              img.removeAttribute('crossorigin');
+            }
+          });
           // Force light mode inside the cloned document so PDFs always render with white backgrounds.
           clonedDoc.documentElement.classList.remove('dark');
           clonedDoc.body.classList.remove('dark');
@@ -1629,9 +1652,16 @@ export default function App() {
   if (view === 'report' && currentSession) {
     return (
       <div className="h-screen overflow-y-auto bg-white dark:bg-gray-950">
+        {isGeneratingPdf && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center flex-col gap-4 text-white">
+            <RefreshCw className="animate-spin" size={48} />
+            <p className="text-xl font-bold">Generating PDF Report...</p>
+            <p className="text-sm opacity-80">This may take a few moments</p>
+          </div>
+        )}
         <div className="max-w-4xl mx-auto p-6 md:p-12 print:p-0">
           <div className="flex flex-col gap-4 mb-8 print:hidden">
-            <Button 
+            <Button
               variant="ghost"
               onClick={() => { vibrate(HAPTIC.SUCCESS); setView('home'); }}
               className="flex items-center gap-2 self-start"
@@ -1646,7 +1676,7 @@ export default function App() {
               </Button>
               <div className="flex gap-2">
                 <Button fullWidth onClick={handleShare} disabled={isGeneratingPdf}>
-                  <Share size={20} className={isGeneratingPdf ? 'animate-spin' : ''} /> 
+                  <Share size={20} className={isGeneratingPdf ? 'animate-spin' : ''} />
                   {isGeneratingPdf ? 'Generating PDF...' : 'Share'}
                 </Button>
               </div>
