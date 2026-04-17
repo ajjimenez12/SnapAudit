@@ -1172,12 +1172,15 @@ export default function App() {
       let reportHeightCssPx: number | null = null;
 
       // Pre-fetch all photos as data URLs keyed by photo ID.
-      // getPhotoBlob downloads directly from Supabase storage (no CORS needed),
-      // so this works even when signed URLs haven't been cached yet.
+      // Each fetch is capped at 12 s so a stalled Supabase download can't hang forever.
+      const PHOTO_FETCH_TIMEOUT_MS = 12000;
       const photoDataUrlMap = new Map<string, string>();
       await Promise.all(photosToPrint.map(async (photo) => {
         try {
-          const blob = await getPhotoBlob(photo);
+          const timeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), PHOTO_FETCH_TIMEOUT_MS)
+          );
+          const blob = await Promise.race([getPhotoBlob(photo), timeout]);
           if (!blob) return;
           const dataUrl = await blobToDataUrl(blob);
           photoDataUrlMap.set(photo.id, dataUrl);
@@ -1206,13 +1209,14 @@ export default function App() {
           // Replace photo image srcs with pre-fetched data URLs so html2canvas
           // never needs CORS access to Supabase storage. Works even when the
           // img src is empty (synced photos with no cached signed URL yet).
+          // Transparent 1×1 GIF — used when photo fetch timed out so html2canvas
+          // never makes its own CORS network requests for these images.
+          const PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
           clonedDoc.querySelectorAll('img[data-photo-id]').forEach((imgEl: Element) => {
             const img = imgEl as HTMLImageElement;
             const dataUrl = photoDataUrlMap.get(img.dataset.photoId ?? '');
-            if (dataUrl) {
-              img.src = dataUrl;
-              img.removeAttribute('crossorigin');
-            }
+            img.src = dataUrl ?? PLACEHOLDER;
+            img.removeAttribute('crossorigin');
           });
           // Force light mode inside the cloned document so PDFs always render with white backgrounds.
           clonedDoc.documentElement.classList.remove('dark');
