@@ -536,8 +536,8 @@ function HistoryView({
 
 export default function App() {
   const { user, isLoading: authLoading } = useAuth();
-const { 
-    sessions, 
+  const {
+    sessions,
     photos,
     currentSessionId, 
     setCurrentSessionId, 
@@ -575,7 +575,7 @@ const {
 
   useEffect(() => {
     if (!toastMessage) return;
-const t = setTimeout(() => setToastMessage(null), TIMING.TOAST_DURATION);
+    const t = setTimeout(() => setToastMessage(null), TIMING.TOAST_DURATION);
     return () => clearTimeout(t);
   }, [toastMessage]);
 
@@ -907,7 +907,7 @@ const t = setTimeout(() => setToastMessage(null), TIMING.TOAST_DURATION);
     }
   }, [photos, isOnline, isSyncing, markAsSynced, setIsSyncing, sessions, user]);
   
-  const [view, setView] = useState<'home' | 'session' | 'photo-edit' | 'report'>('home');
+  const [view, setView] = useState<View>('home');
   const [editingPhoto, setEditingPhoto] = useState<PhotoEntry | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{ title: string, message: string, onConfirm: () => void, variant?: 'danger' | 'warning' } | null>(null);
@@ -1055,7 +1055,7 @@ const t = setTimeout(() => setToastMessage(null), TIMING.TOAST_DURATION);
       addPhoto(currentSessionId, imageData, tag, comment);
       setCapturedImage(null);
     } else if (editingPhoto) {
-      updatePhoto(editingPhoto.id, { tag, comment, imageData });
+      updatePhoto(editingPhoto.id, { tag, comment, imageData, synced: false });
       setEditingPhoto(null);
       setView(lastView);
     }
@@ -1616,10 +1616,10 @@ const t = setTimeout(() => setToastMessage(null), TIMING.TOAST_DURATION);
           }}
           onGoHome={() => setView('home')}
         />
-        <BottomNav 
-          activeView={view} 
-          setView={setView} 
-          onNewSession={() => setIsCreatingSession(true)}
+        <BottomNav
+          activeView={view}
+          setView={setView}
+          onNewSession={() => { setView('home'); setIsCreatingSession(true); }}
           hasActiveSession={!!currentSessionId}
         />
       </div>
