@@ -1168,21 +1168,16 @@ export default function App() {
       let avoidBreakRects: Array<{ top: number; bottom: number }> = [];
       let reportHeightCssPx: number | null = null;
 
-      // Pre-fetch all photos as data URLs so html2canvas never has to make
-      // network requests for images (avoids CORS hangs on Supabase signed URLs).
+      // Pre-fetch all photos as data URLs keyed by photo ID.
+      // getPhotoBlob downloads directly from Supabase storage (no CORS needed),
+      // so this works even when signed URLs haven't been cached yet.
       const photoDataUrlMap = new Map<string, string>();
       await Promise.all(photosToPrint.map(async (photo) => {
         try {
-          const src = photo.imageData || photoUrls[photo.id] || '';
-          if (!src) return;
-          if (src.startsWith('data:')) {
-            photoDataUrlMap.set(src, src);
-            return;
-          }
           const blob = await getPhotoBlob(photo);
           if (!blob) return;
           const dataUrl = await blobToDataUrl(blob);
-          photoDataUrlMap.set(src, dataUrl);
+          photoDataUrlMap.set(photo.id, dataUrl);
         } catch (e) {
           console.warn('Failed to pre-fetch photo for PDF', photo.id, e);
         }
@@ -1205,10 +1200,12 @@ export default function App() {
         backgroundColor: pdfBackground,
         windowWidth: 800,
         onclone: (clonedDoc) => {
-          // Replace remote image srcs with pre-fetched data URLs so html2canvas
-          // doesn't need CORS access to Supabase storage.
-          clonedDoc.querySelectorAll('img').forEach((img: HTMLImageElement) => {
-            const dataUrl = photoDataUrlMap.get(img.src);
+          // Replace photo image srcs with pre-fetched data URLs so html2canvas
+          // never needs CORS access to Supabase storage. Works even when the
+          // img src is empty (synced photos with no cached signed URL yet).
+          clonedDoc.querySelectorAll('img[data-photo-id]').forEach((imgEl: Element) => {
+            const img = imgEl as HTMLImageElement;
+            const dataUrl = photoDataUrlMap.get(img.dataset.photoId ?? '');
             if (dataUrl) {
               img.src = dataUrl;
               img.removeAttribute('crossorigin');
@@ -1534,9 +1531,10 @@ export default function App() {
                 {group.photos.map(photo => (
                   <div key={photo.id} className="flex gap-4 items-start break-inside-avoid w-full md:w-[calc(50%-12px)] print:w-full">
                     <div className="relative shrink-0 w-[1.5in] h-[1.5in] bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden border border-gray-100 dark:border-gray-800 shadow-sm">
-                      <img 
-                        src={getPhotoSrc(photo)} 
-                        alt={photo.tag} 
+                      <img
+                        src={getPhotoSrc(photo)}
+                        alt={photo.tag}
+                        data-photo-id={photo.id}
                         onClick={() => {
                           if (!isPrintOnly) {
                             openPhotoEditor(photo, 'report');
