@@ -1198,6 +1198,32 @@ export default function App() {
         return;
       }
 
+      // Inject pre-fetched data URLs directly into the live DOM images BEFORE
+      // html2canvas runs. html2canvas pre-scans src values when it starts, so
+      // onclone swaps (which fire after scanning) arrive too late for synced
+      // photos whose src is still "". By patching the live element first and
+      // waiting for the load events, html2canvas sees fully-loaded images.
+      const originalSrcs = new Map<HTMLImageElement, string>();
+      const loadPromises: Promise<void>[] = [];
+      element.querySelectorAll<HTMLImageElement>('img[data-photo-id]').forEach((img) => {
+        const dataUrl = photoDataUrlMap.get(img.dataset.photoId ?? '');
+        if (!dataUrl) return;
+        originalSrcs.set(img, img.getAttribute('src') ?? '');
+        img.removeAttribute('crossorigin');
+        img.src = dataUrl;
+        if (!img.complete) {
+          loadPromises.push(
+            new Promise<void>((resolve) => {
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+            }),
+          );
+        }
+      });
+      if (loadPromises.length > 0) {
+        await Promise.race([Promise.all(loadPromises), new Promise((r) => setTimeout(r, 5000))]);
+      }
+
       const canvas = await html2canvas(element, {
         scale: 2,
         useCORS: false,
@@ -1311,7 +1337,10 @@ export default function App() {
           }
         }
       });
-      
+
+      // Restore original srcs so the live report view stays intact
+      originalSrcs.forEach((src, img) => { img.src = src; });
+
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
