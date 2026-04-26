@@ -776,8 +776,8 @@ export default function App() {
 
       if (user && photo.storagePath) {
         const { data, error } = await supabase.storage.from('photos').download(photo.storagePath);
-        if (error) throw error;
-        return data ?? null;
+        if (!error && data) return data;
+        // Download failed — fall through to signed URL / fetch fallbacks below.
       }
 
       if (photo.storagePath) {
