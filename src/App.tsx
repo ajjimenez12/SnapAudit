@@ -869,9 +869,15 @@ export default function App() {
             const storagePath = photo.storagePath ?? `${user.id}/${photo.id}.jpg`;
             const blob = dataUrlToBlob(photo.imageData);
 
-            const { error: uploadErr } = await supabase.storage
-              .from('photos')
-              .upload(storagePath, blob, { contentType: blob.type || 'image/jpeg', upsert: true });
+            const uploadTimeout = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('upload timeout')), 30_000),
+            );
+            const { error: uploadErr } = await Promise.race([
+              supabase.storage
+                .from('photos')
+                .upload(storagePath, blob, { contentType: blob.type || 'image/jpeg', upsert: true }),
+              uploadTimeout,
+            ]);
             if (uploadErr) throw uploadErr;
 
             const { error: upsertPhotoErr } = await supabase.from('photos').upsert({
@@ -885,13 +891,11 @@ export default function App() {
             });
             if (upsertPhotoErr) throw upsertPhotoErr;
 
+            await ensureSignedUrl({ ...photo, storagePath });
             markAsSynced(photo.id);
             updatePhoto(photo.id, { storagePath, imageData: undefined, synced: true });
-            await ensureSignedUrl({ ...photo, storagePath });
           } catch (error) {
             console.error('Failed to sync photo:', photo.id, error);
-            // Stop syncing if we hit a network error
-            break;
           }
         }
       } catch (error) {
