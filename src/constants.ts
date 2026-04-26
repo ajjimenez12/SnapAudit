@@ -18,7 +18,8 @@ export const STORAGE_KEYS = {
   CURRENT_SESSION_ID: 'snapaudit_current_session_id',
   STORES: 'snapaudit_stores',
   DELETED_SESSIONS: 'snapaudit_deleted_sessions',
-  HISTORY_FILTER: 'snapaudit_history_filter'
+  HISTORY_FILTER: 'snapaudit_history_filter',
+  SIGNED_URLS: 'snapaudit_signed_urls',
 };
 
 export const DEFAULT_STORES = [
@@ -54,6 +55,12 @@ export const PAGINATION = {
   SESSIONS_LIMIT: 500,
   PHOTOS_LIMIT: 2000
 } as const;
+
+// Number of sessions shown on the home page that keep imageData locally.
+export const HOME_SESSION_COUNT = 5;
+
+// Signed URL lifetime in seconds (12 hours, matching Supabase token TTL).
+export const SIGNED_URL_TTL_SECONDS = 60 * 60 * 12;
 
 export const DATE_FORMAT = {
   SESSION_TITLE: 'yyyy/MM/dd - XXXX'

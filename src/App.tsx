@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { useSnapAudit } from './hooks/useSnapAudit';
 import { useAuth } from './hooks/useAuth';
-import { PRESET_TAGS, HAPTIC, TIMING, CACHE, PAGINATION, DATE_FORMAT, STORAGE_KEYS } from './constants';
+import { PRESET_TAGS, HAPTIC, TIMING, CACHE, PAGINATION, DATE_FORMAT, STORAGE_KEYS, HOME_SESSION_COUNT, SIGNED_URL_TTL_SECONDS } from './constants';
 import { Tag, PhotoEntry, Session, View } from './types';
 import { resizeImage } from './utils/image';
 import { MarkupEditor } from './components/MarkupEditor';
@@ -556,6 +556,7 @@ export default function App() {
     addStore,
     clearAllData,
     clearPhotos,
+    clearImageDataForPhotos,
     setUserScope,
     mergeRemote
   } = useSnapAudit();
@@ -563,15 +564,61 @@ export default function App() {
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const photoBlobCacheRef = useRef<Map<string, Blob>>(new Map());
+  // Tracks when each signed URL was generated so we can compute expiry for localStorage persistence.
+  const photoUrlTimestampsRef = useRef<Map<string, number>>(new Map());
+  // Stable ref to latest photos so cleanup effects avoid stale closures.
+  const photosRef = useRef(photos);
+  useEffect(() => { photosRef.current = photos; }, [photos]);
   const isIOS = useMemo(() => isIosDevice(), []);
+
+  const SIGNED_URL_TTL_MS = SIGNED_URL_TTL_SECONDS * 1000;
 
   useEffect(() => {
     setUserScope(user?.id ?? null);
-    setPhotoUrls({});
+    // Load persisted signed URLs for the incoming user (clear for logged-out state).
+    photoUrlTimestampsRef.current.clear();
+    if (user?.id) {
+      try {
+        const raw = localStorage.getItem(`${STORAGE_KEYS.SIGNED_URLS}:${user.id}`);
+        if (raw) {
+          const stored: Record<string, { url: string; t: number }> = JSON.parse(raw);
+          const now = Date.now();
+          const valid: Record<string, string> = {};
+          for (const [id, entry] of Object.entries(stored)) {
+            if (now - entry.t < SIGNED_URL_TTL_MS) {
+              valid[id] = entry.url;
+              photoUrlTimestampsRef.current.set(id, entry.t);
+            }
+          }
+          setPhotoUrls(valid);
+        } else {
+          setPhotoUrls({});
+        }
+      } catch {
+        setPhotoUrls({});
+      }
+    } else {
+      setPhotoUrls({});
+    }
     if (!user) {
       setCurrentSessionId(null);
     }
   }, [user?.id, user, setUserScope, setCurrentSessionId]);
+
+  // Persist signed URLs to localStorage whenever they change so the next page load skips refetching.
+  useEffect(() => {
+    if (!user?.id) return;
+    try {
+      const now = Date.now();
+      const toStore: Record<string, { url: string; t: number }> = {};
+      for (const [id, url] of Object.entries(photoUrls) as [string, string][]) {
+        toStore[id] = { url, t: photoUrlTimestampsRef.current.get(id) ?? now };
+      }
+      localStorage.setItem(`${STORAGE_KEYS.SIGNED_URLS}:${user.id}`, JSON.stringify(toStore));
+    } catch {
+      // Non-critical: ignore quota errors for URL cache.
+    }
+  }, [photoUrls, user?.id]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -683,20 +730,42 @@ export default function App() {
 
   const getPhotoSrc = (photo: PhotoEntry) => photo.imageData || photoUrls[photo.id] || '';
 
+  // Batch-generates signed URLs for multiple photos in a single Supabase API call.
+  // Returns a map of photoId → signedUrl for any URLs that were newly created.
+  const ensureSignedUrls = async (photosToFetch: PhotoEntry[]): Promise<Record<string, string>> => {
+    if (!user) return {};
+    const needed = photosToFetch.filter(p => p.storagePath && !photoUrls[p.id]);
+    if (needed.length === 0) return {};
+    try {
+      const { data, error } = await supabase.storage
+        .from('photos')
+        .createSignedUrls(needed.map(p => p.storagePath!), SIGNED_URL_TTL_SECONDS);
+      if (error) throw error;
+      const now = Date.now();
+      const updates: Record<string, string> = {};
+      for (const entry of data ?? []) {
+        if (!entry.signedUrl || (entry as any).error) continue;
+        const photo = needed.find(p => p.storagePath === entry.path);
+        if (photo) {
+          updates[photo.id] = entry.signedUrl;
+          photoUrlTimestampsRef.current.set(photo.id, now);
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        setPhotoUrls(prev => ({ ...prev, ...updates }));
+      }
+      return updates;
+    } catch (e) {
+      console.error('Failed to batch-create signed URLs', e);
+      return {};
+    }
+  };
+
   const ensureSignedUrl = async (photo: PhotoEntry): Promise<string | null> => {
     if (!user || !photo.storagePath) return null;
     if (photoUrls[photo.id]) return photoUrls[photo.id];
-    try {
-      const { data, error } = await supabase.storage.from('photos').createSignedUrl(photo.storagePath, 60 * 60 * 12);
-      if (error) throw error;
-      if (data?.signedUrl) {
-        setPhotoUrls(prev => ({ ...prev, [photo.id]: data.signedUrl }));
-        return data.signedUrl;
-      }
-    } catch (e) {
-      console.error('Failed to create signed URL', e);
-    }
-    return null;
+    const updates = await ensureSignedUrls([photo]);
+    return updates[photo.id] ?? null;
   };
 
   const getPhotoBlob = async (photo: PhotoEntry): Promise<Blob | null> => {
@@ -832,14 +901,31 @@ export default function App() {
     })();
   };
 
-  // Pre-fetch signed URLs for uploaded photos (keeps localStorage small by clearing imageData after sync).
+  // Pre-fetch signed URLs for history photos in one batched Supabase call.
+  // History photos have no imageData (cleared after sync) so they need a URL to display.
   useEffect(() => {
     if (!user || !isOnline) return;
-    const missing = photos.filter(p => !p.imageData && p.storagePath && !photoUrls[p.id]).slice(0, 50);
-    for (const p of missing) {
-      ensureSignedUrl(p);
-    }
+    const missing = photos
+      .filter(p => !p.imageData && p.storagePath && !photoUrls[p.id])
+      .slice(0, TIMING.PREFETCH_LIMIT);
+    if (missing.length > 0) void ensureSignedUrls(missing);
   }, [photos, photoUrls, user, isOnline]);
+
+  // When a session rolls off the home page (slot >HOME_SESSION_COUNT), clear its imageData
+  // so it doesn't bloat localStorage. History photos render via signed URLs instead.
+  const prevHomeIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const homeIds = new Set(sessions.slice(0, HOME_SESSION_COUNT).map(s => s.id));
+    const rolledOff = [...prevHomeIdsRef.current].filter(id => !homeIds.has(id));
+    if (rolledOff.length > 0) {
+      const rolledOffSet = new Set(rolledOff);
+      const toClear = photosRef.current
+        .filter(p => rolledOffSet.has(p.sessionId) && p.imageData && p.synced)
+        .map(p => p.id);
+      if (toClear.length > 0) clearImageDataForPhotos(toClear);
+    }
+    prevHomeIdsRef.current = homeIds;
+  }, [sessions, clearImageDataForPhotos]);
 
   // Background Sync Logic (upload unsynced photos to Supabase)
   useEffect(() => {
@@ -850,7 +936,11 @@ export default function App() {
         if (unsyncedPhotos.length === 0 || !isOnline || isSyncing) return;
 
         setIsSyncing(true);
-        
+
+        // Sessions visible on the home page keep imageData for instant local rendering.
+        // Photos in older sessions have imageData cleared after sync to save storage.
+        const homeSessionIds = new Set(sessions.slice(0, HOME_SESSION_COUNT).map(s => s.id));
+
         for (const photo of unsyncedPhotos) {
           try {
             const session = sessions.find(s => s.id === photo.sessionId);
@@ -891,9 +981,18 @@ export default function App() {
             });
             if (upsertPhotoErr) throw upsertPhotoErr;
 
-            await ensureSignedUrl({ ...photo, storagePath });
+            // Get the signed URL before clearing imageData so the image never
+            // flashes blank. For home-page sessions keep imageData entirely.
+            const isHomeSession = homeSessionIds.has(photo.sessionId);
+            if (!isHomeSession) {
+              await ensureSignedUrl({ ...photo, storagePath });
+            }
             markAsSynced(photo.id);
-            updatePhoto(photo.id, { storagePath, imageData: undefined, synced: true });
+            updatePhoto(photo.id, {
+              storagePath,
+              synced: true,
+              ...(!isHomeSession && { imageData: undefined }),
+            });
           } catch (error) {
             console.error('Failed to sync photo:', photo.id, error);
           }

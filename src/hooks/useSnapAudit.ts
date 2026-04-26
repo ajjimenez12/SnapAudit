@@ -161,6 +161,12 @@ export function useSnapAudit() {
     setPhotos(prev => prev.filter(p => p.id !== photoId));
   }, []);
 
+  const clearImageDataForPhotos = useCallback((photoIds: string[]) => {
+    if (photoIds.length === 0) return;
+    const idSet = new Set(photoIds);
+    setPhotos(prev => prev.map(p => idSet.has(p.id) && p.imageData ? { ...p, imageData: undefined } : p));
+  }, []);
+
   const getSessionPhotos = useCallback((sessionId: string) => {
     return photos.filter(p => p.sessionId === sessionId).sort((a, b) => b.createdAt - a.createdAt);
   }, [photos]);
@@ -290,5 +296,6 @@ export function useSnapAudit() {
     addStore,
     clearAllData,
     clearPhotos,
+    clearImageDataForPhotos,
   };
 }
