@@ -4,6 +4,14 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  const hmrPort = Number(process.env.HMR_PORT);
+  const hmr =
+    process.env.DISABLE_HMR === 'true'
+      ? false
+      : Number.isFinite(hmrPort) && hmrPort > 0
+        ? { port: hmrPort }
+        : true;
+
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -24,8 +32,8 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      // HMR can be disabled or moved when multiple local apps are running.
+      hmr,
     },
   };
 });

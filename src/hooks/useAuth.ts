@@ -1,13 +1,30 @@
 import { useEffect, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
+import { isTestAuthEnabled, TEST_USER_ID } from '../lib/runtimeFlags';
 
 export function useAuth() {
   const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(() => (
+    isTestAuthEnabled()
+      ? ({
+          id: TEST_USER_ID,
+          email: 'test@snapaudit.local',
+          app_metadata: {},
+          user_metadata: {},
+          aud: 'authenticated',
+          created_at: new Date(0).toISOString(),
+        } as User)
+      : null
+  ));
+  const [isLoading, setIsLoading] = useState(() => !isTestAuthEnabled());
 
   useEffect(() => {
+    if (isTestAuthEnabled()) {
+      setIsLoading(false);
+      return;
+    }
+
     let isMounted = true;
 
     supabase.auth
@@ -36,4 +53,3 @@ export function useAuth() {
 
   return { session, user, isLoading };
 }
-

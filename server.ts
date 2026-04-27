@@ -9,6 +9,13 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+  const hmrPort = Number(process.env.HMR_PORT);
+  const hmr =
+    process.env.DISABLE_HMR === 'true'
+      ? false
+      : Number.isFinite(hmrPort) && hmrPort > 0
+        ? { port: hmrPort }
+        : undefined;
 
   app.use(express.json({ limit: '50mb' }));
 
@@ -20,7 +27,10 @@ async function startServer() {
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
