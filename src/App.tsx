@@ -26,7 +26,9 @@ import {
   Moon,
   Filter,
   Search,
-  ChevronDown
+  ChevronDown,
+  ZoomIn,
+  ZoomOut
 } from 'lucide-react';
 import { useSnapAudit } from './hooks/useSnapAudit';
 import { useAuth } from './hooks/useAuth';
@@ -35,14 +37,87 @@ import { Tag, PhotoEntry, Session, View } from './types';
 import { resizeImage } from './utils/image';
 import { MarkupEditor } from './components/MarkupEditor';
 import { supabase } from './lib/supabaseClient';
+import { isTestAuthEnabled } from './lib/runtimeFlags';
 import { dataUrlToBlob, blobToDataUrl } from './utils/dataUrl';
+import { loadPhotoImageData } from './utils/photoStore';
 
 // --- Helpers ---
+
+type SignedUrlCacheEntry = {
+  url?: string;
+  expiresAt: number;
+  promise?: Promise<string | null>;
+};
+
+type RemoteSessionRow = {
+  id: string;
+  title: string;
+  location: string | null;
+  created_at: string;
+};
+
+type RemotePhotoRow = {
+  id: string;
+  session_id: string;
+  tag: string;
+  comment: string | null;
+  storage_path: string;
+  created_at: string;
+};
+
+type SyncedPhotoRow = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  tag: Tag;
+  comment: string;
+  storage_path: string;
+  created_at: string;
+};
 
 const vibrate = (pattern: number | number[] = HAPTIC.CARD_SWIPE) => {
   if (typeof navigator !== 'undefined' && navigator.vibrate) {
     navigator.vibrate(pattern);
   }
+};
+
+const runWithConcurrency = async <T,>(
+  items: T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<void>
+) => {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await task(items[index], index);
+    }
+  }));
+};
+
+const fetchPagedRows = async <T,>(
+  pageSize: number,
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>
+) => {
+  const rows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await buildQuery(from, to);
+    if (error) throw error;
+
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+
+    from += pageSize;
+  }
+
+  return rows;
 };
 
 const isIosDevice = () => {
@@ -123,6 +198,7 @@ const BottomNav = ({
       <div className="relative -top-6">
         <button 
           onClick={() => { vibrate(HAPTIC.NEW_SESSION); onNewSession(); }}
+          aria-label="New audit session"
           className="w-16 h-16 bg-blue-600 text-white rounded-full shadow-xl shadow-blue-200 dark:shadow-none flex items-center justify-center active:scale-90 transition-transform border-4 border-white dark:border-gray-900"
         >
           <Plus size={32} />
@@ -563,6 +639,9 @@ export default function App() {
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const photoBlobCacheRef = useRef<Map<string, Blob>>(new Map());
+  const signedUrlCacheRef = useRef<Map<string, SignedUrlCacheEntry>>(new Map());
+  const syncInFlightRef = useRef(false);
+  const syncRetryCountRef = useRef(0);
   const isIOS = useMemo(() => isIosDevice(), []);
 
   useEffect(() => {
@@ -584,12 +663,22 @@ export default function App() {
     const loadRemote = async () => {
       if (!user) return;
       try {
-        const { data: sessionRows, error: sErr } = await supabase
-          .from('sessions')
-          .select('id,title,location,created_at')
-          .order('created_at', { ascending: false })
-          .limit(PAGINATION.SESSIONS_LIMIT);
-        if (sErr) throw sErr;
+        const [sessionRows, photoRows] = await Promise.all([
+          fetchPagedRows<RemoteSessionRow>(PAGINATION.REMOTE_PAGE_SIZE, (from, to) =>
+            supabase
+              .from('sessions')
+              .select('id,title,location,created_at')
+              .order('created_at', { ascending: false })
+              .range(from, to)
+          ),
+          fetchPagedRows<RemotePhotoRow>(PAGINATION.REMOTE_PAGE_SIZE, (from, to) =>
+            supabase
+              .from('photos')
+              .select('id,session_id,tag,comment,storage_path,created_at')
+              .order('created_at', { ascending: false })
+              .range(from, to)
+          ),
+        ]);
 
         const remoteSessions: Session[] = (sessionRows ?? []).map((r: any) => ({
           id: String(r.id),
@@ -597,13 +686,6 @@ export default function App() {
           location: r.location ? String(r.location) : undefined,
           createdAt: new Date(r.created_at).getTime(),
         }));
-
-        const { data: photoRows, error: pErr } = await supabase
-          .from('photos')
-          .select('id,session_id,tag,comment,storage_path,created_at')
-          .order('created_at', { ascending: false })
-          .limit(PAGINATION.PHOTOS_LIMIT);
-        if (pErr) throw pErr;
 
         const remotePhotos: PhotoEntry[] = (photoRows ?? []).map((r: any) => ({
           id: String(r.id),
@@ -621,7 +703,7 @@ export default function App() {
       }
     };
 
-    if (user) loadRemote();
+    if (user && !isTestAuthEnabled()) loadRemote();
   }, [user, mergeRemote]);
 
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -683,20 +765,45 @@ export default function App() {
 
   const getPhotoSrc = (photo: PhotoEntry) => photo.imageData || photoUrls[photo.id] || '';
 
+  const signedUrlCacheKey = (photo: PhotoEntry) => photo.storagePath || photo.id;
+
   const ensureSignedUrl = async (photo: PhotoEntry): Promise<string | null> => {
     if (!user || !photo.storagePath) return null;
-    if (photoUrls[photo.id]) return photoUrls[photo.id];
-    try {
-      const { data, error } = await supabase.storage.from('photos').createSignedUrl(photo.storagePath, 60 * 60 * 12);
-      if (error) throw error;
-      if (data?.signedUrl) {
-        setPhotoUrls(prev => ({ ...prev, [photo.id]: data.signedUrl }));
-        return data.signedUrl;
+    const key = signedUrlCacheKey(photo);
+    const now = Date.now();
+    const cached = signedUrlCacheRef.current.get(key);
+
+    if (cached?.url && cached.expiresAt > now) {
+      if (!photoUrls[photo.id]) {
+        setPhotoUrls(prev => (prev[photo.id] ? prev : { ...prev, [photo.id]: cached.url! }));
       }
-    } catch (e) {
-      console.error('Failed to create signed URL', e);
+      return cached.url;
     }
-    return null;
+
+    if (cached?.promise) return cached.promise;
+
+    const promise = (async () => {
+      try {
+        const { data, error } = await supabase.storage.from('photos').createSignedUrl(photo.storagePath!, 60 * 60 * 12);
+        if (error) throw error;
+        if (data?.signedUrl) {
+          signedUrlCacheRef.current.set(key, {
+            url: data.signedUrl,
+            expiresAt: Date.now() + CACHE.URL_CACHE_EXPIRY,
+          });
+          setPhotoUrls(prev => (prev[photo.id] === data.signedUrl ? prev : { ...prev, [photo.id]: data.signedUrl }));
+          return data.signedUrl;
+        }
+      } catch (e) {
+        signedUrlCacheRef.current.delete(key);
+        console.error('Failed to create signed URL', e);
+      }
+      return null;
+    })();
+
+    signedUrlCacheRef.current.set(key, { expiresAt: now + CACHE.URL_CACHE_EXPIRY, promise });
+
+    return promise;
   };
 
   const getPhotoBlob = async (photo: PhotoEntry): Promise<Blob | null> => {
@@ -704,6 +811,11 @@ export default function App() {
       const cached = photoBlobCacheRef.current.get(photo.id);
       if (cached) return cached;
       if (photo.imageData) return dataUrlToBlob(photo.imageData);
+
+      if (user) {
+        const storedImageData = await loadPhotoImageData(user.id, photo.id).catch(() => null);
+        if (storedImageData) return dataUrlToBlob(storedImageData);
+      }
 
       if (user && photo.storagePath) {
         const { data, error } = await supabase.storage.from('photos').download(photo.storagePath);
@@ -834,7 +946,7 @@ export default function App() {
 
   // Pre-fetch signed URLs for uploaded photos (keeps localStorage small by clearing imageData after sync).
   useEffect(() => {
-    if (!user || !isOnline) return;
+    if (!user || !isOnline || isTestAuthEnabled()) return;
     const missing = photos.filter(p => !p.imageData && p.storagePath && !photoUrls[p.id]).slice(0, 50);
     for (const p of missing) {
       ensureSignedUrl(p);
@@ -845,36 +957,52 @@ export default function App() {
   useEffect(() => {
     const syncPhotos = async () => {
       try {
-        if (!user) return;
+        if (!user || isTestAuthEnabled()) return;
         const unsyncedPhotos = photos.filter(p => !p.synced);
-        if (unsyncedPhotos.length === 0 || !isOnline || isSyncing) return;
+        if (unsyncedPhotos.length === 0 || !isOnline || syncInFlightRef.current) return;
 
+        syncInFlightRef.current = true;
         setIsSyncing(true);
-        
-        for (const photo of unsyncedPhotos) {
-          try {
-            const session = sessions.find(s => s.id === photo.sessionId);
-            if (!session) continue;
-            if (!photo.imageData) continue;
+        let syncedCount = 0;
 
-            const { error: upsertSessionErr } = await supabase.from('sessions').upsert({
+        const sessionsById = new Map<string, Session>(
+          unsyncedPhotos
+            .map(photo => sessions.find(s => s.id === photo.sessionId))
+            .filter((session): session is Session => !!session)
+            .map(session => [session.id, session] as [string, Session])
+        );
+
+        if (sessionsById.size > 0) {
+          const { error: upsertSessionsErr } = await supabase.from('sessions').upsert(
+            Array.from(sessionsById.values()).map(session => ({
               id: session.id,
               user_id: user.id,
               title: session.title,
               location: session.location ?? null,
               created_at: new Date(session.createdAt).toISOString(),
-            });
-            if (upsertSessionErr) throw upsertSessionErr;
+            }))
+          );
+          if (upsertSessionsErr) throw upsertSessionsErr;
+        }
+
+        const syncedPhotoRows: SyncedPhotoRow[] = [];
+        const failedPhotoIds: string[] = [];
+
+        await runWithConcurrency<PhotoEntry>(unsyncedPhotos, TIMING.SYNC_UPLOAD_CONCURRENCY, async (photo) => {
+          try {
+            const session = sessions.find(s => s.id === photo.sessionId);
+            if (!session) return;
 
             const storagePath = photo.storagePath ?? `${user.id}/${photo.id}.jpg`;
-            const blob = dataUrlToBlob(photo.imageData);
+            const blob = await getPhotoBlob(photo);
+            if (!blob) return;
 
             const { error: uploadErr } = await supabase.storage
               .from('photos')
               .upload(storagePath, blob, { contentType: blob.type || 'image/jpeg', upsert: true });
             if (uploadErr) throw uploadErr;
 
-            const { error: upsertPhotoErr } = await supabase.from('photos').upsert({
+            syncedPhotoRows.push({
               id: photo.id,
               user_id: user.id,
               session_id: photo.sessionId,
@@ -883,26 +1011,49 @@ export default function App() {
               storage_path: storagePath,
               created_at: new Date(photo.createdAt).toISOString(),
             });
-            if (upsertPhotoErr) throw upsertPhotoErr;
 
-            markAsSynced(photo.id);
-            updatePhoto(photo.id, { storagePath, imageData: undefined, synced: true });
-            await ensureSignedUrl({ ...photo, storagePath });
+            syncedCount += 1;
           } catch (error) {
             console.error('Failed to sync photo:', photo.id, error);
-            // Stop syncing if we hit a network error
-            break;
+            failedPhotoIds.push(photo.id);
+          }
+        });
+
+        if (syncedPhotoRows.length > 0) {
+          const { error: upsertPhotosErr } = await supabase.from('photos').upsert(syncedPhotoRows);
+          if (upsertPhotosErr) throw upsertPhotosErr;
+
+          for (const row of syncedPhotoRows) {
+            markAsSynced(row.id);
+            updatePhoto(row.id, { storagePath: row.storage_path, imageData: undefined, synced: true });
+            await ensureSignedUrl({
+              id: row.id,
+              sessionId: row.session_id,
+              tag: row.tag,
+              comment: row.comment,
+              storagePath: row.storage_path,
+              createdAt: new Date(row.created_at).getTime(),
+              synced: true,
+            });
           }
         }
+
+        syncRetryCountRef.current =
+          failedPhotoIds.length === 0 && syncedCount === unsyncedPhotos.length
+            ? 0
+            : Math.min(syncRetryCountRef.current + 1, 5);
       } catch (error) {
+        syncRetryCountRef.current = Math.min(syncRetryCountRef.current + 1, 5);
         console.error('Sync error:', error);
       } finally {
+        syncInFlightRef.current = false;
         setIsSyncing(false);
       }
     };
 
-    if (isOnline && user) {
-      const timer = setTimeout(syncPhotos, TIMING.SYNC_DELAY);
+    if (isOnline && user && !isTestAuthEnabled()) {
+      const retryDelay = TIMING.SYNC_DELAY * Math.max(1, syncRetryCountRef.current + 1);
+      const timer = setTimeout(syncPhotos, retryDelay);
       return () => clearTimeout(timer);
     }
   }, [photos, isOnline, isSyncing, markAsSynced, setIsSyncing, sessions, user]);
@@ -1109,6 +1260,7 @@ export default function App() {
 
   const deleteSessionRemote = async (sessionId: string) => {
     if (!user || !isOnline) return;
+    if (isTestAuthEnabled()) return;
 
     try {
       const { data: photoRows, error: listErr } = await supabase
@@ -1175,7 +1327,7 @@ export default function App() {
       // Each fetch is capped at 12 s so a stalled Supabase download can't hang forever.
       const PHOTO_FETCH_TIMEOUT_MS = 12000;
       const photoDataUrlMap = new Map<string, string>();
-      await Promise.all(photosToPrint.map(async (photo) => {
+      await runWithConcurrency(photosToPrint, TIMING.PDF_PHOTO_FETCH_CONCURRENCY, async (photo) => {
         try {
           const timeout = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('timeout')), PHOTO_FETCH_TIMEOUT_MS)
@@ -1187,7 +1339,7 @@ export default function App() {
         } catch (e) {
           console.warn('Failed to pre-fetch photo for PDF', photo.id, e);
         }
-      }));
+      });
 
       // Ensure the element is rendered and visible for html2canvas
       const element = document.getElementById('report-to-print') || document.getElementById('report-view');
@@ -1602,6 +1754,77 @@ export default function App() {
     );
   };
 
+  const renderConfirmationModal = () => {
+    if (!confirmAction) return null;
+
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        />
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          className="relative w-full max-w-xs bg-white dark:bg-gray-900 rounded-3xl p-6 shadow-2xl text-center"
+        >
+          <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${
+            confirmAction.variant === 'warning' 
+              ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-500 dark:text-orange-400' 
+              : 'bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400'
+          }`}>
+            {confirmAction.variant === 'warning' ? <Settings size={24} /> : <Trash2 size={24} />}
+          </div>
+          <h3 className="text-lg font-bold mb-2 dark:text-white">{confirmAction.title}</h3>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">{confirmAction.message}</p>
+          {confirmAction.variant === 'warning' ? (
+            <div className="flex flex-col gap-3">
+              <Button variant="primary" fullWidth onClick={() => {
+                vibrate(HAPTIC.DELETE);
+                setConfirmAction({
+                  title: 'Clear All Data',
+                  message: 'This will delete ALL sessions and photos. This action cannot be undone.',
+                  onConfirm: clearAllData,
+                  variant: 'danger'
+                });
+              }}>
+                Clear All Data
+              </Button>
+              <Button variant="secondary" fullWidth onClick={() => {
+                vibrate(HAPTIC.MEDIUM);
+                clearPhotos();
+                setConfirmAction(null);
+                setToastMessage('All photos cleared');
+              }}>
+                Clear Photos Only
+              </Button>
+              <Button variant="ghost" fullWidth onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <div className="flex gap-3">
+              <Button variant="ghost" fullWidth onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}>
+                Cancel
+              </Button>
+              <Button variant="danger" fullWidth onClick={() => {
+                vibrate(HAPTIC.DELETE);
+                confirmAction.onConfirm();
+                setConfirmAction(null);
+              }}>
+                Delete
+              </Button>
+            </div>
+          )}
+        </motion.div>
+      </div>
+    );
+  };
+
   // --- Views ---
 
   if (authLoading) {
@@ -1650,6 +1873,10 @@ export default function App() {
           onNewSession={() => { setView('home'); setIsCreatingSession(true); }}
           hasActiveSession={!!currentSessionId}
         />
+        <AnimatePresence>
+          {renderConfirmationModal()}
+        </AnimatePresence>
+        <SavedToast />
       </div>
     );
   }
@@ -1759,7 +1986,13 @@ export default function App() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => supabase.auth.signOut()}
+            onClick={() => {
+              if (isTestAuthEnabled()) {
+                window.location.href = window.location.pathname;
+                return;
+              }
+              supabase.auth.signOut();
+            }}
             className="text-[10px] font-bold px-2 py-1 rounded-full border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
           >
             Sign out
@@ -2221,74 +2454,8 @@ export default function App() {
         )}
       </AnimatePresence>
 
-{/* Confirmation Modal */}
       <AnimatePresence>
-        {confirmAction && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="relative w-full max-w-xs bg-white dark:bg-gray-900 rounded-3xl p-6 shadow-2xl text-center"
-            >
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${
-                confirmAction.variant === 'warning' 
-                  ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-500 dark:text-orange-400' 
-                  : 'bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400'
-              }`}>
-                {confirmAction.variant === 'warning' ? <Settings size={24} /> : <Trash2 size={24} />}
-              </div>
-              <h3 className="text-lg font-bold mb-2 dark:text-white">{confirmAction.title}</h3>
-              <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">{confirmAction.message}</p>
-              {confirmAction.variant === 'warning' ? (
-                <div className="flex flex-col gap-3">
-                  <Button variant="primary" fullWidth onClick={() => {
-                    vibrate(HAPTIC.DELETE);
-                    setConfirmAction({
-                      title: 'Clear All Data',
-                      message: 'This will delete ALL sessions and photos. This action cannot be undone.',
-                      onConfirm: clearAllData,
-                      variant: 'danger'
-                    });
-                  }}>
-                    Clear All Data
-                  </Button>
-                  <Button variant="secondary" fullWidth onClick={() => {
-                    vibrate(HAPTIC.MEDIUM);
-                    clearPhotos();
-                    setConfirmAction(null);
-                    setToastMessage('All photos cleared');
-                  }}>
-                    Clear Photos Only
-                  </Button>
-                  <Button variant="ghost" fullWidth onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}>
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex gap-3">
-                  <Button variant="ghost" fullWidth onClick={() => { vibrate(HAPTIC.SUCCESS); setConfirmAction(null); }}>
-                    Cancel
-                  </Button>
-                  <Button variant="danger" fullWidth onClick={() => {
-                    vibrate(HAPTIC.DELETE);
-                    confirmAction.onConfirm();
-                    setConfirmAction(null);
-                  }}>
-                    Delete
-                  </Button>
-                </div>
-              )}
-            </motion.div>
-          </div>
-        )}
+        {renderConfirmationModal()}
       </AnimatePresence>
 
       <SavedToast />
@@ -2309,20 +2476,33 @@ function CameraView({
   onShowPhotos: () => void,
   onUpload: () => void
 }) {
+  const MIN_CAMERA_ZOOM = 1;
+  const MAX_CAMERA_ZOOM = 4;
+  const CAMERA_ZOOM_STEP = 0.1;
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraRequestKey, setCameraRequestKey] = useState(0);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [zoom, setZoom] = useState(MIN_CAMERA_ZOOM);
 
   useEffect(() => {
     let isActive = true;
 
     async function startCamera() {
       try {
+        setCameraError(null);
+        setIsCameraReady(false);
+        setZoom(MIN_CAMERA_ZOOM);
+
         if (streamRef.current) {
           streamRef.current.getTracks().forEach((track) => track.stop());
           streamRef.current = null;
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('CameraNotSupported');
         }
 
         const s = await navigator.mediaDevices.getUserMedia({ 
@@ -2336,9 +2516,12 @@ function CameraView({
         }
 
         streamRef.current = s;
-        setStream(s);
         if (videoRef.current) {
           videoRef.current.srcObject = s;
+          videoRef.current.play().catch(() => {
+            // Autoplay can be blocked in some embedded browsers; the video element
+            // still receives the stream and will start when the browser allows it.
+          });
         }
       } catch (err: any) {
         console.error("Error accessing camera:", err);
@@ -2346,6 +2529,8 @@ function CameraView({
           setCameraError('Camera access denied. Please enable camera permissions or upload a photo instead.');
         } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
           setCameraError('No camera found. Please connect a camera or upload a photo.');
+        } else if (err.message === 'CameraNotSupported') {
+          setCameraError('Camera capture is not available in this browser. Please upload a photo instead.');
         } else {
           setCameraError('Failed to access camera. Please try again or upload a photo.');
         }
@@ -2362,7 +2547,7 @@ function CameraView({
         videoRef.current.srcObject = null;
       }
     };
-  }, []);
+  }, [cameraRequestKey]);
 
   if (cameraError) {
     return (
@@ -2372,7 +2557,7 @@ function CameraView({
         </div>
         <p className="text-gray-700 dark:text-gray-300 mb-6 max-w-sm">{cameraError}</p>
         <div className="flex flex-col gap-3 w-full max-w-xs">
-          <Button onClick={() => setCameraError(null)}>Try Again</Button>
+          <Button onClick={() => setCameraRequestKey((key) => key + 1)}>Try Again</Button>
           <Button variant="outline" onClick={onUpload}>Upload Photo Instead</Button>
           <Button variant="ghost" onClick={onDone}>Cancel</Button>
         </div>
@@ -2384,11 +2569,37 @@ function CameraView({
     if (videoRef.current && canvasRef.current) {
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      const videoWidth = video.videoWidth;
+      const videoHeight = video.videoHeight;
+      const previewRect = video.getBoundingClientRect();
+
+      if (!videoWidth || !videoHeight || !previewRect.width || !previewRect.height) return;
+
+      const previewAspect = previewRect.width / previewRect.height;
+      const videoAspect = videoWidth / videoHeight;
+      let baseWidth = videoWidth;
+      let baseHeight = videoHeight;
+      let baseX = 0;
+      let baseY = 0;
+
+      if (videoAspect > previewAspect) {
+        baseWidth = videoHeight * previewAspect;
+        baseX = (videoWidth - baseWidth) / 2;
+      } else {
+        baseHeight = videoWidth / previewAspect;
+        baseY = (videoHeight - baseHeight) / 2;
+      }
+
+      const cropWidth = baseWidth / zoom;
+      const cropHeight = baseHeight / zoom;
+      const cropX = baseX + (baseWidth - cropWidth) / 2;
+      const cropY = baseY + (baseHeight - cropHeight) / 2;
+
+      canvas.width = Math.round(baseWidth);
+      canvas.height = Math.round(baseHeight);
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
         const data = canvas.toDataURL('image/jpeg', 0.8);
         onCapture(data);
       }
@@ -2401,9 +2612,20 @@ function CameraView({
         ref={videoRef} 
         autoPlay 
         playsInline 
-        className="absolute inset-0 w-full h-full object-cover"
+        onLoadedMetadata={() => setIsCameraReady(true)}
+        className="absolute inset-0 w-full h-full object-cover transition-transform duration-150 ease-out"
+        style={{ transform: `scale(${zoom})` }}
       />
       <canvas ref={canvasRef} className="hidden" />
+
+      {!isCameraReady && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-950 text-white z-10">
+          <div className="flex flex-col items-center gap-3">
+            <RefreshCw size={28} className="animate-spin" />
+            <p className="text-sm font-semibold">Starting camera...</p>
+          </div>
+        </div>
+      )}
       
       {/* Top Bar */}
       <div className="absolute top-0 left-0 right-0 p-4 pt-safe flex justify-end z-10">
@@ -2416,10 +2638,46 @@ function CameraView({
         </Button>
       </div>
 
+      <div className="absolute left-4 right-4 bottom-32 z-10 flex items-center gap-3 rounded-2xl bg-black/45 px-4 py-3 text-white shadow-lg backdrop-blur-md">
+        <button
+          type="button"
+          aria-label="Zoom out"
+          title="Zoom out"
+          onClick={() => setZoom((value) => Math.max(MIN_CAMERA_ZOOM, Number((value - CAMERA_ZOOM_STEP).toFixed(1))))}
+          disabled={zoom <= MIN_CAMERA_ZOOM}
+          className="h-10 w-10 shrink-0 rounded-full bg-white/15 flex items-center justify-center transition active:scale-95 disabled:opacity-40 disabled:active:scale-100"
+        >
+          <ZoomOut size={20} />
+        </button>
+        <label className="sr-only" htmlFor="camera-zoom">Camera zoom</label>
+        <input
+          id="camera-zoom"
+          type="range"
+          min={MIN_CAMERA_ZOOM}
+          max={MAX_CAMERA_ZOOM}
+          step={CAMERA_ZOOM_STEP}
+          value={zoom}
+          onChange={(event) => setZoom(Number(event.target.value))}
+          className="h-10 min-w-0 flex-1 accent-white"
+        />
+        <span className="w-12 text-center text-sm font-bold tabular-nums">{zoom.toFixed(1)}x</span>
+        <button
+          type="button"
+          aria-label="Zoom in"
+          title="Zoom in"
+          onClick={() => setZoom((value) => Math.min(MAX_CAMERA_ZOOM, Number((value + CAMERA_ZOOM_STEP).toFixed(1))))}
+          disabled={zoom >= MAX_CAMERA_ZOOM}
+          className="h-10 w-10 shrink-0 rounded-full bg-white/15 flex items-center justify-center transition active:scale-95 disabled:opacity-40 disabled:active:scale-100"
+        >
+          <ZoomIn size={20} />
+        </button>
+      </div>
+
       {/* Bottom Controls */}
       <div className="absolute bottom-0 left-0 right-0 p-8 pb-safe-offset-8 flex items-center justify-between z-10 bg-gradient-to-t from-black/60 to-transparent">
         <button 
           onClick={onShowPhotos}
+          aria-label="Show session photos"
           className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white active:scale-90 transition-transform"
         >
           <ImageIcon size={24} />
@@ -2427,13 +2685,16 @@ function CameraView({
 
         <button 
           onClick={capture}
-          className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50"
+          disabled={!isCameraReady}
+          aria-label="Take snapshot"
+          className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50 disabled:opacity-50 disabled:active:scale-100"
         >
           <div className="w-16 h-16 rounded-full border-2 border-black/10" />
         </button>
 
         <button 
           onClick={onUpload}
+          aria-label="Upload photo"
           className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white active:scale-90 transition-transform"
         >
           <Upload size={24} />

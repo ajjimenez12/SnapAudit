@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { X, Check, RotateCcw, Pencil, Undo2, Redo2, Eraser } from 'lucide-react';
 import { motion } from 'motion/react';
+import { TIMING } from '../constants';
 
 interface MarkupEditorProps {
   imageData: string;
@@ -25,8 +26,9 @@ export const MarkupEditor: React.FC<MarkupEditorProps> = ({ imageData, onSave, o
     const dataUrl = canvas.toDataURL();
     const newHistory = history.slice(0, historyStep + 1);
     newHistory.push(dataUrl);
-    setHistory(newHistory);
-    setHistoryStep(newHistory.length - 1);
+    const trimmedHistory = newHistory.slice(-TIMING.MARKUP_HISTORY_LIMIT);
+    setHistory(trimmedHistory);
+    setHistoryStep(trimmedHistory.length - 1);
   };
 
   useEffect(() => {
