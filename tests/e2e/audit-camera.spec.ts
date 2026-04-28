@@ -34,15 +34,24 @@ const startSession = async (page: Page, store = '1851') => {
   });
 };
 
-test('creates an audit, zooms camera, captures, tags, and stores photo metadata without image payload', async ({ page }) => {
+test('creates an audit, pinch zooms camera, captures, tags, and stores photo metadata without image payload', async ({ page }) => {
   const consoleErrors = watchConsoleErrors(page);
 
   await startSession(page);
 
-  await expect(page.getByLabel('Camera zoom')).toBeVisible();
   await expect(page.getByText('1.0x')).toBeVisible();
-  await page.getByRole('button', { name: 'Zoom in' }).click();
-  await expect(page.getByText('1.1x')).toBeVisible();
+  await page.getByTestId('camera-pinch-surface').evaluate((surface) => {
+    const target = surface as HTMLElement;
+    const startA = new Touch({ identifier: 1, target, clientX: 140, clientY: 260 });
+    const startB = new Touch({ identifier: 2, target, clientX: 220, clientY: 260 });
+    const moveA = new Touch({ identifier: 1, target, clientX: 100, clientY: 260 });
+    const moveB = new Touch({ identifier: 2, target, clientX: 260, clientY: 260 });
+
+    target.dispatchEvent(new TouchEvent('touchstart', { touches: [startA, startB], bubbles: true, cancelable: true }));
+    target.dispatchEvent(new TouchEvent('touchmove', { touches: [moveA, moveB], bubbles: true, cancelable: true }));
+    target.dispatchEvent(new TouchEvent('touchend', { touches: [], bubbles: true, cancelable: true }));
+  });
+  await expect(page.getByText('2.0x')).toBeVisible();
 
   await page.waitForFunction(() => {
     const video = document.querySelector('video');
@@ -55,7 +64,7 @@ test('creates an audit, zooms camera, captures, tags, and stores photo metadata 
   await page.locator('textarea').fill('E2E zoom capture');
   await page.getByText('Save Entry').click();
 
-  await expect(page.getByLabel('Camera zoom')).toBeVisible();
+  await expect(page.getByText('2.0x')).toBeVisible();
 
   const storageState = await page.evaluate(() => ({
     photos: localStorage.getItem('snapaudit_photos:local-test-user'),

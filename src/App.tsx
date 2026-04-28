@@ -27,8 +27,7 @@ import {
   Filter,
   Search,
   ChevronDown,
-  ZoomIn,
-  ZoomOut
+  ZoomIn
 } from 'lucide-react';
 import { useSnapAudit } from './hooks/useSnapAudit';
 import { useAuth } from './hooks/useAuth';
@@ -2465,6 +2464,61 @@ export default function App() {
 
 // --- Photo Editor Component ---
 
+const MIN_CAMERA_ZOOM = 1;
+const MAX_CAMERA_ZOOM = 4;
+const CAMERA_ZOOM_STEP = 0.1;
+
+type CameraZoomRange = {
+  min: number;
+  max: number;
+  step: number;
+};
+
+type CameraZoomCapabilities = MediaTrackCapabilities & {
+  zoom?: {
+    min?: number;
+    max?: number;
+    step?: number;
+  };
+};
+
+type CameraZoomSettings = MediaTrackSettings & {
+  zoom?: number;
+};
+
+type CameraZoomConstraintSet = MediaTrackConstraintSet & {
+  zoom?: number;
+};
+
+const clampCameraZoom = (value: number) => (
+  Math.min(MAX_CAMERA_ZOOM, Math.max(MIN_CAMERA_ZOOM, Number(value.toFixed(1))))
+);
+
+const getTouchDistance = (touches: TouchList) => {
+  const [first, second] = [touches[0], touches[1]];
+  if (!first || !second) return 0;
+  return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
+};
+
+const getCameraZoomRange = (track: MediaStreamTrack): CameraZoomRange | null => {
+  const capabilities = track.getCapabilities?.() as CameraZoomCapabilities | undefined;
+  const zoom = capabilities?.zoom;
+  if (!zoom) return null;
+
+  const min = typeof zoom.min === 'number' ? zoom.min : MIN_CAMERA_ZOOM;
+  const max = typeof zoom.max === 'number' ? zoom.max : MAX_CAMERA_ZOOM;
+  const step = typeof zoom.step === 'number' && zoom.step > 0 ? zoom.step : CAMERA_ZOOM_STEP;
+
+  if (max <= min) return null;
+  return { min, max, step };
+};
+
+const snapNativeZoom = (value: number, range: CameraZoomRange) => {
+  const clamped = Math.min(range.max, Math.max(range.min, value));
+  const steps = Math.round((clamped - range.min) / range.step);
+  return Number((range.min + steps * range.step).toFixed(3));
+};
+
 function CameraView({ 
   onCapture, 
   onDone, 
@@ -2476,16 +2530,18 @@ function CameraView({
   onShowPhotos: () => void,
   onUpload: () => void
 }) {
-  const MIN_CAMERA_ZOOM = 1;
-  const MAX_CAMERA_ZOOM = 4;
-  const CAMERA_ZOOM_STEP = 0.1;
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const videoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const pinchRef = useRef<{ distance: number; zoom: number } | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraRequestKey, setCameraRequestKey] = useState(0);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [zoom, setZoom] = useState(MIN_CAMERA_ZOOM);
+  const [nativeZoomRange, setNativeZoomRange] = useState<CameraZoomRange | null>(null);
+  const [nativeZoom, setNativeZoom] = useState(MIN_CAMERA_ZOOM);
+  const digitalZoom = Math.max(MIN_CAMERA_ZOOM, zoom / Math.max(nativeZoom, MIN_CAMERA_ZOOM));
 
   useEffect(() => {
     let isActive = true;
@@ -2495,6 +2551,9 @@ function CameraView({
         setCameraError(null);
         setIsCameraReady(false);
         setZoom(MIN_CAMERA_ZOOM);
+        setNativeZoom(MIN_CAMERA_ZOOM);
+        setNativeZoomRange(null);
+        videoTrackRef.current = null;
 
         if (streamRef.current) {
           streamRef.current.getTracks().forEach((track) => track.stop());
@@ -2506,7 +2565,11 @@ function CameraView({
         }
 
         const s = await navigator.mediaDevices.getUserMedia({ 
-          video: { facingMode: 'environment' }, 
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
           audio: false 
         });
 
@@ -2516,6 +2579,10 @@ function CameraView({
         }
 
         streamRef.current = s;
+        const videoTrack = s.getVideoTracks()[0] ?? null;
+        videoTrackRef.current = videoTrack;
+        setNativeZoomRange(videoTrack ? getCameraZoomRange(videoTrack) : null);
+
         if (videoRef.current) {
           videoRef.current.srcObject = s;
           videoRef.current.play().catch(() => {
@@ -2543,11 +2610,60 @@ function CameraView({
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
+      videoTrackRef.current = null;
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
     };
   }, [cameraRequestKey]);
+
+  useEffect(() => {
+    const track = videoTrackRef.current;
+    if (!track || !nativeZoomRange) {
+      setNativeZoom(MIN_CAMERA_ZOOM);
+      return;
+    }
+
+    let cancelled = false;
+    const requestedNativeZoom = snapNativeZoom(Math.min(zoom, nativeZoomRange.max), nativeZoomRange);
+
+    track.applyConstraints({
+      advanced: [{ zoom: requestedNativeZoom } as CameraZoomConstraintSet],
+    }).then(() => {
+      if (cancelled) return;
+      const settings = track.getSettings?.() as CameraZoomSettings | undefined;
+      setNativeZoom(settings?.zoom ?? requestedNativeZoom);
+    }).catch(() => {
+      if (!cancelled) setNativeZoom(MIN_CAMERA_ZOOM);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [nativeZoomRange, zoom]);
+
+  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 2) return;
+    pinchRef.current = {
+      distance: getTouchDistance(event.touches),
+      zoom,
+    };
+  };
+
+  const handleTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 2 || !pinchRef.current) return;
+
+    const distance = getTouchDistance(event.touches);
+    if (!distance || !pinchRef.current.distance) return;
+
+    setZoom(clampCameraZoom(pinchRef.current.zoom * (distance / pinchRef.current.distance)));
+  };
+
+  const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length < 2) {
+      pinchRef.current = null;
+    }
+  };
 
   if (cameraError) {
     return (
@@ -2590,8 +2706,8 @@ function CameraView({
         baseY = (videoHeight - baseHeight) / 2;
       }
 
-      const cropWidth = baseWidth / zoom;
-      const cropHeight = baseHeight / zoom;
+      const cropWidth = baseWidth / digitalZoom;
+      const cropHeight = baseHeight / digitalZoom;
       const cropX = baseX + (baseWidth - cropWidth) / 2;
       const cropY = baseY + (baseHeight - cropHeight) / 2;
 
@@ -2599,22 +2715,33 @@ function CameraView({
       canvas.height = Math.round(baseHeight);
       const ctx = canvas.getContext('2d');
       if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
-        const data = canvas.toDataURL('image/jpeg', 0.8);
+        const data = canvas.toDataURL('image/jpeg', 0.92);
         onCapture(data);
       }
     }
   };
 
   return (
-    <div className="relative h-full w-full flex flex-col overflow-hidden">
+    <div
+      className="relative h-full w-full flex flex-col overflow-hidden"
+      data-testid="camera-pinch-surface"
+      aria-label="Pinch to zoom camera"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+      style={{ touchAction: 'none' }}
+    >
       <video 
         ref={videoRef} 
         autoPlay 
         playsInline 
         onLoadedMetadata={() => setIsCameraReady(true)}
         className="absolute inset-0 w-full h-full object-cover transition-transform duration-150 ease-out"
-        style={{ transform: `scale(${zoom})` }}
+        style={{ transform: `scale(${digitalZoom})` }}
       />
       <canvas ref={canvasRef} className="hidden" />
 
@@ -2638,39 +2765,9 @@ function CameraView({
         </Button>
       </div>
 
-      <div className="absolute left-4 right-4 bottom-32 z-10 flex items-center gap-3 rounded-2xl bg-black/45 px-4 py-3 text-white shadow-lg backdrop-blur-md">
-        <button
-          type="button"
-          aria-label="Zoom out"
-          title="Zoom out"
-          onClick={() => setZoom((value) => Math.max(MIN_CAMERA_ZOOM, Number((value - CAMERA_ZOOM_STEP).toFixed(1))))}
-          disabled={zoom <= MIN_CAMERA_ZOOM}
-          className="h-10 w-10 shrink-0 rounded-full bg-white/15 flex items-center justify-center transition active:scale-95 disabled:opacity-40 disabled:active:scale-100"
-        >
-          <ZoomOut size={20} />
-        </button>
-        <label className="sr-only" htmlFor="camera-zoom">Camera zoom</label>
-        <input
-          id="camera-zoom"
-          type="range"
-          min={MIN_CAMERA_ZOOM}
-          max={MAX_CAMERA_ZOOM}
-          step={CAMERA_ZOOM_STEP}
-          value={zoom}
-          onChange={(event) => setZoom(Number(event.target.value))}
-          className="h-10 min-w-0 flex-1 accent-white"
-        />
-        <span className="w-12 text-center text-sm font-bold tabular-nums">{zoom.toFixed(1)}x</span>
-        <button
-          type="button"
-          aria-label="Zoom in"
-          title="Zoom in"
-          onClick={() => setZoom((value) => Math.min(MAX_CAMERA_ZOOM, Number((value + CAMERA_ZOOM_STEP).toFixed(1))))}
-          disabled={zoom >= MAX_CAMERA_ZOOM}
-          className="h-10 w-10 shrink-0 rounded-full bg-white/15 flex items-center justify-center transition active:scale-95 disabled:opacity-40 disabled:active:scale-100"
-        >
-          <ZoomIn size={20} />
-        </button>
+      <div className="absolute left-1/2 bottom-32 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/45 px-4 py-2 text-white shadow-lg backdrop-blur-md">
+        <ZoomIn size={18} aria-hidden="true" />
+        <span className="w-12 text-center text-sm font-bold tabular-nums" aria-live="polite">{zoom.toFixed(1)}x</span>
       </div>
 
       {/* Bottom Controls */}

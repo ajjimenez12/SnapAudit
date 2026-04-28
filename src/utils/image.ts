@@ -1,7 +1,7 @@
 /**
- * Resizes a base64 image string to a maximum width/height and reduces quality.
+ * Resizes a base64 image string while preserving enough detail for review zoom.
  */
-export async function resizeImage(base64Str: string, maxWidth = 1024, maxHeight = 1024, quality = 0.7): Promise<string> {
+export async function resizeImage(base64Str: string, maxWidth = 1920, maxHeight = 1920, quality = 0.86): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -30,6 +30,8 @@ export async function resizeImage(base64Str: string, maxWidth = 1024, maxHeight 
         return;
       }
 
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, width, height);
       resolve(canvas.toDataURL('image/jpeg', quality));
     };
