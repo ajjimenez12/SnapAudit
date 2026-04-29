@@ -2959,17 +2959,19 @@ function CameraView({
         <span className="w-12 text-center text-sm font-bold tabular-nums" aria-live="polite">{zoom.toFixed(1)}x</span>
       </div>
 
-      <button
-        onClick={capture}
-        disabled={!isCameraReady}
-        aria-label="Take snapshot"
-        className="absolute left-1/2 -translate-x-1/2 bottom-8 z-20 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50 disabled:opacity-50 disabled:active:scale-100"
-      >
-        <div className="w-16 h-16 rounded-full border-2 border-black/10" />
-      </button>
-
       {/* Bottom Controls */}
-      <div className="absolute bottom-0 left-0 right-0 p-8 pb-safe-offset-8 flex items-center justify-end z-10 bg-gradient-to-t from-black/60 to-transparent">
+      <div className="absolute bottom-0 left-0 right-0 p-8 pb-safe-offset-8 flex items-center justify-between z-10 bg-gradient-to-t from-black/60 to-transparent">
+        <div className="w-12 h-12" />
+
+        <button
+          onClick={capture}
+          disabled={!isCameraReady}
+          aria-label="Take snapshot"
+          className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50 disabled:opacity-50 disabled:active:scale-100"
+        >
+          <div className="w-16 h-16 rounded-full border-2 border-black/10" />
+        </button>
+
         <button
           onClick={onUpload}
           aria-label="Upload photo"
