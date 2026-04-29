@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Session, PhotoEntry, Tag } from '../types';
+import { Session, PhotoEntry, Tag, Location } from '../types';
 import { STORAGE_KEYS, DEFAULT_STORES } from '../constants';
+import { supabase } from '../lib/supabaseClient';
 import {
   clearUserPhotoImageData,
   deletePhotoImageData,
@@ -79,6 +80,7 @@ export function useSnapAudit() {
 
   const [storageError, setStorageError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [locations, setLocations] = useState<Location[]>([]);
 
   // Persist sessions
   useEffect(() => {
@@ -339,6 +341,31 @@ export function useSnapAudit() {
     });
   }, [deletedSessionIds]);
 
+  const loadLocations = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('locations')
+      .select('id, name')
+      .order('name', { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    setLocations((data ?? []) as Location[]);
+  }, []);
+
+  const addLocation = useCallback(async (name: string) => {
+    const { error } = await supabase
+      .from('locations')
+      .insert({ name });
+
+    if (error) {
+      throw error;
+    }
+
+    await loadLocations();
+  }, [loadLocations]);
+
   return {
     sessions,
     photos,
@@ -361,5 +388,8 @@ export function useSnapAudit() {
     addStore,
     clearAllData,
     clearPhotos,
+    locations,
+    loadLocations,
+    addLocation,
   };
 }
