@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Loader2, MapPin, Shield, UserRound, X } from 'lucide-react';
+import { Check, Loader2, MapPin, Shield, Trash2, UserRound, X } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import type { Location, UserLocationAssignment, UserRole } from '../types';
 
@@ -55,6 +55,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
   const [isLocationsLoading, setIsLocationsLoading] = useState(true);
   const [isAssignmentsLoading, setIsAssignmentsLoading] = useState(true);
   const [isSavingLocation, setIsSavingLocation] = useState(false);
+  const [deletingLocationId, setDeletingLocationId] = useState<string | null>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [savingAssignmentKey, setSavingAssignmentKey] = useState<string | null>(null);
   const [newLocationName, setNewLocationName] = useState('');
@@ -216,6 +217,31 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     setIsSavingLocation(false);
   };
 
+  const handleDeleteLocation = async (location: Location) => {
+    const confirmed = window.confirm(
+      `Delete location ${location.name}? Existing session records will keep their text location, but this store will be removed from the shared location list and user assignments.`
+    );
+    if (!confirmed) return;
+
+    setDeletingLocationId(location.id);
+    setLocationsError(null);
+
+    const { error } = await supabase
+      .from('locations')
+      .delete()
+      .eq('id', location.id);
+
+    if (error) {
+      setLocationsError('Failed to delete location.');
+      setDeletingLocationId(null);
+      return;
+    }
+
+    setLocations((prev) => prev.filter((item) => item.id !== location.id));
+    setAssignments((prev) => prev.filter((assignment) => assignment.locationId !== location.id));
+    setDeletingLocationId(null);
+  };
+
   const toggleLocationAssignment = async (userId: string, locationId: string, isAssigned: boolean) => {
     const assignmentKey = `${userId}:${locationId}`;
     setSavingAssignmentKey(assignmentKey);
@@ -343,15 +369,32 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
           </div>
         ) : (
           <div className="space-y-3">
-            {locations.map((location) => (
-              <div
-                key={location.id}
-                className="rounded-2xl border border-gray-200 bg-white px-4 py-3"
-              >
-                <p className="font-semibold text-gray-900">{location.name}</p>
-                <p className="mt-1 text-xs text-gray-500">{location.id}</p>
-              </div>
-            ))}
+            {locations.map((location) => {
+              const isDeleting = deletingLocationId === location.id;
+
+              return (
+                <div
+                  key={location.id}
+                  className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-900">{location.name}</p>
+                    <p className="mt-1 text-xs text-gray-500">{location.id}</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isDeleting}
+                    onClick={() => void handleDeleteLocation(location)}
+                    className="shrink-0 rounded-xl border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                      {isDeleting ? 'Deleting...' : 'Delete'}
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
