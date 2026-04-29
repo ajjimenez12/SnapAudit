@@ -2961,6 +2961,8 @@ function CameraView({
 
       {/* Bottom Controls */}
       <div className="absolute bottom-0 left-0 right-0 p-8 pb-safe-offset-8 flex items-center justify-between z-10 bg-gradient-to-t from-black/60 to-transparent">
+        <div className="w-12 h-12" />
+
         <button
           onClick={capture}
           disabled={!isCameraReady}
@@ -2970,7 +2972,7 @@ function CameraView({
           <div className="w-16 h-16 rounded-full border-2 border-black/10" />
         </button>
 
-        <button 
+        <button
           onClick={onUpload}
           aria-label="Upload photo"
           className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white active:scale-90 transition-transform"
