@@ -419,99 +419,125 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     );
 
     return (
-      <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="space-y-3">
-          <p className="text-xs font-black uppercase tracking-wider text-gray-400">Users</p>
-          {users.map((user) => {
-            const isSelected = user.id === selectedUserId;
-            const assignedCount = assignments.filter((assignment) => assignment.userId === user.id).length;
-
-            return (
-              <button
-                key={user.id}
-                type="button"
-                onClick={() => setSelectedUserId(user.id)}
-                className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
-                  isSelected
-                    ? 'border-blue-200 bg-blue-50'
-                    : 'border-gray-200 bg-white hover:border-blue-200 hover:bg-blue-50/50'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-gray-900">
-                      {user.fullName || user.email || 'Unnamed'}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-gray-500">{user.email || user.id}</p>
-                  </div>
-                  <span className="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-xs font-bold text-gray-600">
-                    {assignedCount}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="space-y-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-          <div>
-            <p className="text-xs font-black uppercase tracking-wider text-gray-400">Assigned Stores</p>
-            <h4 className="mt-1 text-lg font-semibold text-gray-900">
-              {selectedUser ? selectedUser.fullName || selectedUser.email || 'Unnamed' : 'No user selected'}
-            </h4>
-            <p className="text-sm text-gray-500">
-              Toggle store coverage for the selected user.
-            </p>
+      <div className="space-y-4">
+        <p className="text-xs font-black uppercase tracking-wider text-gray-400">Users</p>
+        {users.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">
+            {emptyStateCopy.users}
           </div>
+        ) : (
+          <div className="space-y-3">
+            {users.map((user) => {
+              const assignedCount = assignments.filter((assignment) => assignment.userId === user.id).length;
 
-          {assignmentsError && (
-            <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
-              {assignmentsError}
-            </div>
-          )}
-
-          {!selectedUser ? (
-            <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">
-              {emptyStateCopy.assignments}
-            </div>
-          ) : locations.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">
-              Add locations first before assigning them.
-            </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {locations.map((location) => {
-                const isAssigned = assignedLocationIds.has(location.id);
-                const assignmentKey = `${selectedUser.id}:${location.id}`;
-                const isSaving = savingAssignmentKey === assignmentKey;
-
-                return (
-                  <button
-                    key={location.id}
-                    type="button"
-                    disabled={isSaving}
-                    onClick={() => void toggleLocationAssignment(selectedUser.id, location.id, isAssigned)}
-                    className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${
-                      isAssigned
-                        ? 'border-blue-200 bg-blue-50 text-blue-700'
-                        : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50/50'
-                    } disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
+              return (
+                <button
+                  key={user.id}
+                  type="button"
+                  onClick={() => setSelectedUserId(user.id)}
+                  className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-left transition-colors hover:border-blue-200 hover:bg-blue-50/50"
+                >
+                  <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="font-semibold">{location.name}</p>
-                      <p className="mt-1 text-xs opacity-70">{location.id}</p>
+                      <p className="truncate font-semibold text-gray-900">
+                        {user.fullName || user.email || 'Unnamed'}
+                      </p>
+                      <p className="mt-1 truncate text-xs text-gray-500">{user.email || user.id}</p>
                     </div>
-                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
-                      isAssigned ? 'border-blue-200 bg-white' : 'border-gray-200 bg-gray-50'
-                    }`}>
-                      {isSaving ? <Loader2 size={14} className="animate-spin" /> : isAssigned ? <Check size={14} /> : null}
+                    <span className="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-xs font-bold text-gray-600">
+                      {assignedCount}
                     </span>
-                  </button>
-                );
-              })}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {!selectedUser && (
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+            {emptyStateCopy.assignments}
+          </div>
+        )}
+
+        {selectedUser && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+            <button
+              type="button"
+              aria-label="Close assignments"
+              onClick={() => setSelectedUserId(null)}
+              className="absolute inset-0 bg-black/45 backdrop-blur-sm"
+            />
+
+            <div className="relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Assigned Stores</p>
+                  <h4 className="mt-1 text-lg font-semibold text-gray-900">
+                    {selectedUser.fullName || selectedUser.email || 'Unnamed'}
+                  </h4>
+                  <p className="text-sm text-gray-500">
+                    Toggle store coverage for this user, then close to return to the list.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedUserId(null)}
+                  className="rounded-xl p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                  aria-label="Close assignments"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5">
+                {assignmentsError && (
+                  <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+                    {assignmentsError}
+                  </div>
+                )}
+
+                {locations.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
+                    Add locations first before assigning them.
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {locations.map((location) => {
+                      const isAssigned = assignedLocationIds.has(location.id);
+                      const assignmentKey = `${selectedUser.id}:${location.id}`;
+                      const isSaving = savingAssignmentKey === assignmentKey;
+
+                      return (
+                        <button
+                          key={location.id}
+                          type="button"
+                          disabled={isSaving}
+                          onClick={() => void toggleLocationAssignment(selectedUser.id, location.id, isAssigned)}
+                          className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${
+                            isAssigned
+                              ? 'border-blue-200 bg-blue-50 text-blue-700'
+                              : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50/50'
+                          } disabled:cursor-not-allowed disabled:opacity-50`}
+                        >
+                          <div className="min-w-0">
+                            <p className="font-semibold">{location.name}</p>
+                            <p className="mt-1 text-xs opacity-70">{location.id}</p>
+                          </div>
+                          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
+                            isAssigned ? 'border-blue-200 bg-white' : 'border-gray-200 bg-gray-50'
+                          }`}>
+                            {isSaving ? <Loader2 size={14} className="animate-spin" /> : isAssigned ? <Check size={14} /> : null}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     );
   };
