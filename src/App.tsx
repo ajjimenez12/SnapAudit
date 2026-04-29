@@ -220,6 +220,7 @@ const BottomNav = ({
 };
 
 function AuthView() {
+  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -278,9 +279,46 @@ function AuthView() {
       </header>
 
       <main className="flex-1 overflow-y-auto p-6 pb-32 max-w-md w-full mx-auto">
-        <h2 className="text-2xl font-black tracking-tight mb-2">Sign in</h2>
+        <div className="mb-6 flex rounded-2xl border border-gray-100 bg-white p-1 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <button
+            type="button"
+            onClick={() => {
+              setMode('sign-in');
+              setError(null);
+              setInfo(null);
+            }}
+            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
+              mode === 'sign-in'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+            }`}
+          >
+            Sign in
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode('sign-up');
+              setError(null);
+              setInfo(null);
+            }}
+            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
+              mode === 'sign-up'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+            }`}
+          >
+            Sign up
+          </button>
+        </div>
+
+        <h2 className="text-2xl font-black tracking-tight mb-2">
+          {mode === 'sign-in' ? 'Sign in' : 'Create account'}
+        </h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-          Your sessions are private to your account and photos are stored in the cloud.
+          {mode === 'sign-in'
+            ? 'Use your email and password to access your assigned stores and audit history.'
+            : 'Create a user account with your name, email, and password. Admins will handle role and store assignments.'}
         </p>
 
         {info && (
@@ -296,14 +334,16 @@ function AuthView() {
         )}
 
         <div className="space-y-3">
-          <input
-            type="text"
-            placeholder="Full name"
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
-            autoCapitalize="words"
-          />
+          {mode === 'sign-up' && (
+            <input
+              type="text"
+              placeholder="Full name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
+              autoCapitalize="words"
+            />
+          )}
           <input
             type="email"
             placeholder="Email"
@@ -322,14 +362,33 @@ function AuthView() {
             className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
           />
 
-          <div className="flex gap-3 pt-2">
-            <Button variant="outline" fullWidth disabled={isWorking || !fullName.trim() || !email || !password} onClick={signUp}>
-              {isWorking ? 'Working...' : 'Sign up'}
-            </Button>
+          {mode === 'sign-in' ? (
             <Button fullWidth disabled={isWorking || !email || !password} onClick={signIn}>
-              {isWorking ? 'Working...' : 'Sign in'}
+              {isWorking ? 'Signing in...' : 'Sign in'}
             </Button>
-          </div>
+          ) : (
+            <div className="flex gap-3 pt-2">
+              <Button
+                variant="outline"
+                fullWidth
+                disabled={isWorking}
+                onClick={() => {
+                  setMode('sign-in');
+                  setError(null);
+                  setInfo(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                fullWidth
+                disabled={isWorking || !fullName.trim() || !email || !password}
+                onClick={signUp}
+              >
+                {isWorking ? 'Creating...' : 'Create account'}
+              </Button>
+            </div>
+          )}
         </div>
 
         <div className="mt-8 text-xs text-gray-400 leading-relaxed">

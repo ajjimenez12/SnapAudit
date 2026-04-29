@@ -79,24 +79,6 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     setIsUsersLoading(true);
     setUsersError(null);
 
-    const directoryResult = await supabase
-      .from('admin_user_directory')
-      .select('id, role, full_name, email')
-      .order('full_name', { ascending: true });
-
-    if (!directoryResult.error) {
-      setUsers(
-        ((directoryResult.data ?? []) as AdminUserDirectoryRow[]).map((profile) => ({
-          id: profile.id,
-          role: profile.role,
-          fullName: profile.full_name ?? null,
-          email: profile.email ?? null,
-        }))
-      );
-      setIsUsersLoading(false);
-      return;
-    }
-
     const profileResult = await supabase
       .from('profiles')
       .select('id, role, full_name, is_hidden')
@@ -110,12 +92,27 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
       return;
     }
 
+    const visibleProfiles = ((profileResult.data ?? []) as ProfileRow[])
+      .filter((profile) => !profile.is_hidden);
+
+    const directoryResult = await supabase
+      .from('admin_user_directory')
+      .select('id, role, full_name, email')
+      .order('full_name', { ascending: true });
+
+    const emailByUserId = new Map<string, string | null>();
+    if (!directoryResult.error) {
+      for (const profile of (directoryResult.data ?? []) as AdminUserDirectoryRow[]) {
+        emailByUserId.set(profile.id, profile.email ?? null);
+      }
+    }
+
     setUsers(
-      ((profileResult.data ?? []) as ProfileRow[]).map((profile) => ({
+      visibleProfiles.map((profile) => ({
         id: profile.id,
         role: profile.role,
         fullName: profile.full_name ?? null,
-        email: null,
+        email: emailByUserId.get(profile.id) ?? null,
       }))
     );
     setIsUsersLoading(false);
