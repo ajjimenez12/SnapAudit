@@ -2334,10 +2334,6 @@ export default function App() {
                   vibrate(HAPTIC.SUCCESS);
                   setView('report');
                 }}
-                onShowPhotos={() => {
-                  vibrate(HAPTIC.SUCCESS);
-                  setShowPhotosList(true);
-                }}
                 onUpload={() => {
                   vibrate(HAPTIC.SUCCESS);
                   pickFromFiles();
@@ -2715,14 +2711,12 @@ const snapNativeZoom = (value: number, range: CameraZoomRange) => {
 };
 
 function CameraView({ 
-  onCapture, 
-  onDone, 
-  onShowPhotos,
+  onCapture,
+  onDone,
   onUpload
-}: { 
-  onCapture: (data: string) => void, 
-  onDone: () => void, 
-  onShowPhotos: () => void,
+}: {
+  onCapture: (data: string) => void,
+  onDone: () => void,
   onUpload: () => void
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -2956,7 +2950,7 @@ function CameraView({
           onClick={onDone}
           className="bg-blue-600/90 backdrop-blur-md border-none shadow-lg"
         >
-          Done
+          Review
         </Button>
       </div>
 
@@ -2967,15 +2961,7 @@ function CameraView({
 
       {/* Bottom Controls */}
       <div className="absolute bottom-0 left-0 right-0 p-8 pb-safe-offset-8 flex items-center justify-between z-10 bg-gradient-to-t from-black/60 to-transparent">
-        <button 
-          onClick={onShowPhotos}
-          aria-label="Show session photos"
-          className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white active:scale-90 transition-transform"
-        >
-          <ImageIcon size={24} />
-        </button>
-
-        <button 
+        <button
           onClick={capture}
           disabled={!isCameraReady}
           aria-label="Take snapshot"
