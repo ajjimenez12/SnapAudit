@@ -147,11 +147,12 @@ export function useSnapAudit() {
     }
   }, [stores, isStorageAvailable]);
 
-  const createSession = useCallback((title: string, location?: string) => {
+  const createSession = useCallback((title: string, location?: string, locationId?: string) => {
     const newSession: Session = {
       id: (globalThis.crypto as any)?.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)),
       title,
       location,
+      locationId,
       createdAt: Date.now(),
     };
     setSessions(prev => [newSession, ...prev]);

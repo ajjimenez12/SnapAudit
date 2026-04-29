@@ -220,6 +220,7 @@ const BottomNav = ({
 };
 
 function AuthView() {
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isWorking, setIsWorking] = useState(false);
@@ -245,7 +246,15 @@ function AuthView() {
     setError(null);
     setInfo(null);
     try {
-      const { data, error: e } = await supabase.auth.signUp({ email, password });
+      const { data, error: e } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: fullName.trim(),
+          },
+        },
+      });
       if (e) throw e;
       if (data.user && !data.session) {
         setInfo('Check your email to confirm your account, then come back and sign in.');
@@ -288,6 +297,14 @@ function AuthView() {
 
         <div className="space-y-3">
           <input
+            type="text"
+            placeholder="Full name"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
+            autoCapitalize="words"
+          />
+          <input
             type="email"
             placeholder="Email"
             value={email}
@@ -306,7 +323,7 @@ function AuthView() {
           />
 
           <div className="flex gap-3 pt-2">
-            <Button variant="outline" fullWidth disabled={isWorking || !email || !password} onClick={signUp}>
+            <Button variant="outline" fullWidth disabled={isWorking || !fullName.trim() || !email || !password} onClick={signUp}>
               {isWorking ? 'Working...' : 'Sign up'}
             </Button>
             <Button fullWidth disabled={isWorking || !email || !password} onClick={signIn}>
@@ -611,7 +628,7 @@ function HistoryView({
 // --- Main App ---
 
 export default function App() {
-  const { user, profile, isLoading: authLoading } = useAuth();
+  const { user, profile, assignedLocationIds, isLoading: authLoading } = useAuth();
   const {
     sessions,
     photos,
@@ -633,7 +650,9 @@ export default function App() {
     clearAllData,
     clearPhotos,
     setUserScope,
-    mergeRemote
+    mergeRemote,
+    locations,
+    loadLocations,
   } = useSnapAudit();
 
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
@@ -651,6 +670,14 @@ export default function App() {
       setCurrentSessionId(null);
     }
   }, [user?.id, user, setUserScope, setCurrentSessionId]);
+
+  useEffect(() => {
+    if (!user || isTestAuthEnabled()) return;
+
+    loadLocations().catch((error) => {
+      console.error('Failed to load locations', error);
+    });
+  }, [user, loadLocations]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -1070,6 +1097,37 @@ export default function App() {
   const [isAddingNewStore, setIsAddingNewStore] = useState(false);
   const [customStoreNumber, setCustomStoreNumber] = useState('');
 
+  const assignedLocations = useMemo(() => {
+    if (profile?.role === 'admin') return locations;
+    const assignedIdSet = new Set(assignedLocationIds);
+    return locations.filter((location) => assignedIdSet.has(location.id));
+  }, [assignedLocationIds, locations, profile?.role]);
+
+  const storeOptions = useMemo(() => {
+    if (assignedLocations.length > 0) {
+      return assignedLocations.map((location) => ({
+        id: location.id,
+        label: location.name || location.id,
+      }));
+    }
+
+    if (profile?.role === 'admin' || isTestAuthEnabled()) {
+      return stores.map((store) => ({ id: store, label: store }));
+    }
+
+    if (locations.length > 0 || assignedLocationIds.length > 0) {
+      return [];
+    }
+
+    return stores.map((store) => ({ id: store, label: store }));
+  }, [assignedLocationIds.length, assignedLocations, locations.length, profile?.role, stores]);
+
+  const selectedStoreOption = useMemo(
+    () => storeOptions.find((option) => option.id === newSessionStore) ?? null,
+    [newSessionStore, storeOptions]
+  );
+  const canAddLegacyStore = (profile?.role === 'admin' || isTestAuthEnabled()) && locations.length === 0;
+
   // Auto-populate title when store changes
   useEffect(() => {
     if (newSessionStore) {
@@ -1080,6 +1138,12 @@ export default function App() {
       setNewSessionTitle(`${yyyy}/${mm}/${dd}-${newSessionStore}`);
     }
   }, [newSessionStore]);
+
+  useEffect(() => {
+    if (!newSessionStore) return;
+    if (storeOptions.some((option) => option.id === newSessionStore)) return;
+    setNewSessionStore('');
+  }, [newSessionStore, storeOptions]);
   
   // Wake Lock to keep screen on during audit and photo tagging
   useEffect(() => {
@@ -1169,9 +1233,9 @@ export default function App() {
 
   const handleNewSession = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (newSessionTitle.trim()) {
+    if (newSessionTitle.trim() && selectedStoreOption) {
       vibrate(HAPTIC.NEW_SESSION);
-      createSession(newSessionTitle, newSessionStore);
+      createSession(newSessionTitle, selectedStoreOption.label, selectedStoreOption.id);
       setIsCreatingSession(false);
       setNewSessionStore('');
       setNewSessionTitle('');
@@ -1881,7 +1945,7 @@ export default function App() {
       <div className="h-screen flex flex-col">
         <HistoryView 
           sessions={sessions}
-          stores={stores}
+          stores={storeOptions.map((option) => option.label)}
           filter={historyFilter}
           setFilter={setHistoryFilter}
           onOpenReport={(session) => {
@@ -2465,20 +2529,30 @@ export default function App() {
                         value={newSessionStore}
                         onChange={(e) => { vibrate(HAPTIC.SUCCESS); setNewSessionStore(e.target.value); }}
                         className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none bg-white dark:bg-gray-800 font-bold text-gray-700 dark:text-gray-200 appearance-none"
+                        disabled={storeOptions.length === 0}
                       >
-                        <option value="" disabled>Select a store...</option>
-                        {stores.map(store => (
-                          <option key={store} value={store}>{store}</option>
+                        <option value="" disabled>
+                          {storeOptions.length === 0 ? 'No assigned stores available' : 'Select a store...'}
+                        </option>
+                        {storeOptions.map((store) => (
+                          <option key={store.id} value={store.id}>{store.label}</option>
                         ))}
                       </select>
-                      <button
-                        type="button"
-                        onClick={() => { vibrate(HAPTIC.SUCCESS); setIsAddingNewStore(true); }}
-                        className="w-12 h-12 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-800 text-gray-400 dark:text-gray-500 flex items-center justify-center hover:border-blue-300 hover:text-blue-400 transition-all shrink-0"
-                      >
-                        <Plus size={20} />
-                      </button>
+                      {canAddLegacyStore && (
+                        <button
+                          type="button"
+                          onClick={() => { vibrate(HAPTIC.SUCCESS); setIsAddingNewStore(true); }}
+                          className="w-12 h-12 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-800 text-gray-400 dark:text-gray-500 flex items-center justify-center hover:border-blue-300 hover:text-blue-400 transition-all shrink-0"
+                        >
+                          <Plus size={20} />
+                        </button>
+                      )}
                     </div>
+                    {storeOptions.length === 0 && (
+                      <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                        Your store list is managed by admins. Ask an admin to assign a location to your account.
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -2492,7 +2566,7 @@ export default function App() {
                     />
                   </div>
 
-                  <Button fullWidth className="mt-4" disabled={!newSessionTitle}>
+                  <Button fullWidth className="mt-4" disabled={!newSessionTitle || !selectedStoreOption}>
                     Start Session
                   </Button>
                 </form>

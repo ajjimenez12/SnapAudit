@@ -35,6 +35,7 @@ export function useAuth() {
         }
       : null
   ));
+  const [assignedLocationIds, setAssignedLocationIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(() => !isTestAuthEnabled());
 
   useEffect(() => {
@@ -77,36 +78,112 @@ export function useAuth() {
         fullName: 'Test User',
         createdAt: 0,
       });
+      setAssignedLocationIds([]);
       return;
     }
 
     if (!user) {
       setProfile(null);
+      setAssignedLocationIds([]);
       return;
     }
 
     let isMounted = true;
 
-    supabase
-      .from('profiles')
-      .select('id, role, full_name, created_at')
-      .eq('id', user.id)
-      .single()
-      .then(({ data, error }) => {
-        if (!isMounted) return;
+    const ensureProfile = async () => {
+      const profileResult = await supabase
+        .from('profiles')
+        .select('id, role, full_name, created_at')
+        .eq('id', user.id)
+        .maybeSingle();
 
-        if (error || !data) {
-          setProfile(null);
-          return;
-        }
+      if (!isMounted) return;
 
-        const profileRow = data as ProfileRow;
+      if (profileResult.error) {
+        setProfile(null);
+        return;
+      }
+
+      if (profileResult.data) {
+        const profileRow = profileResult.data as ProfileRow;
         setProfile({
           id: profileRow.id,
           role: profileRow.role,
           fullName: profileRow.full_name,
           createdAt: new Date(profileRow.created_at).getTime(),
         });
+        return;
+      }
+
+      const metadataFullName = typeof user.user_metadata?.full_name === 'string'
+        ? user.user_metadata.full_name.trim() || null
+        : null;
+
+      const upsertResult = await supabase
+        .from('profiles')
+        .upsert(
+          {
+            id: user.id,
+            role: 'auditor',
+            full_name: metadataFullName,
+          },
+          { onConflict: 'id' }
+        )
+        .select('id, role, full_name, created_at')
+        .single();
+
+      if (!isMounted) return;
+
+      if (upsertResult.error || !upsertResult.data) {
+        setProfile(null);
+        return;
+      }
+
+      const profileRow = upsertResult.data as ProfileRow;
+      setProfile({
+        id: profileRow.id,
+        role: profileRow.role,
+        fullName: profileRow.full_name,
+        createdAt: new Date(profileRow.created_at).getTime(),
+      });
+    };
+
+    void ensureProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (isTestAuthEnabled()) {
+      setAssignedLocationIds([]);
+      return;
+    }
+
+    if (!user) {
+      setAssignedLocationIds([]);
+      return;
+    }
+
+    let isMounted = true;
+
+    supabase
+      .from('user_locations')
+      .select('location_id')
+      .eq('user_id', user.id)
+      .then(({ data, error }) => {
+        if (!isMounted) return;
+        if (error || !data) {
+          setAssignedLocationIds([]);
+          return;
+        }
+
+        setAssignedLocationIds(
+          data
+            .map((row) => row.location_id)
+            .filter((locationId): locationId is string => typeof locationId === 'string')
+        );
       });
 
     return () => {
@@ -114,5 +191,5 @@ export function useAuth() {
     };
   }, [user]);
 
-  return { session, user, profile, isLoading };
+  return { session, user, profile, assignedLocationIds, isLoading };
 }

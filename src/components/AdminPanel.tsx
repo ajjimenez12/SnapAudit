@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Shield, UserRound, MapPin, X } from 'lucide-react';
+import { Check, Loader2, MapPin, Shield, UserRound, X } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
-import type { Location, UserRole } from '../types';
+import type { Location, UserLocationAssignment, UserRole } from '../types';
 
 type AdminPanelProps = {
   onClose: () => void;
 };
 
-type TabKey = 'users' | 'locations';
+type TabKey = 'users' | 'locations' | 'assignments';
 
 type ProfileListItem = {
   id: string;
@@ -29,6 +29,11 @@ type ProfileRow = {
   full_name: string | null;
 };
 
+type UserLocationRow = {
+  user_id: string;
+  location_id: string;
+};
+
 const tabButtonClass = (isActive: boolean) =>
   `flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
     isActive
@@ -45,18 +50,27 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('users');
   const [users, setUsers] = useState<ProfileListItem[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [assignments, setAssignments] = useState<UserLocationAssignment[]>([]);
   const [isUsersLoading, setIsUsersLoading] = useState(true);
   const [isLocationsLoading, setIsLocationsLoading] = useState(true);
+  const [isAssignmentsLoading, setIsAssignmentsLoading] = useState(true);
   const [isSavingLocation, setIsSavingLocation] = useState(false);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [savingAssignmentKey, setSavingAssignmentKey] = useState<string | null>(null);
   const [newLocationName, setNewLocationName] = useState('');
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [locationsError, setLocationsError] = useState<string | null>(null);
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
 
-  const emptyStateCopy = useMemo(() => ({
-    users: 'No users found.',
-    locations: 'No locations added yet.',
-  }), []);
+  const emptyStateCopy = useMemo(
+    () => ({
+      users: 'No users found.',
+      locations: 'No locations added yet.',
+      assignments: 'Select a user to manage assigned stores.',
+    }),
+    []
+  );
 
   const loadUsers = async () => {
     setIsUsersLoading(true);
@@ -123,10 +137,40 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     setIsLocationsLoading(false);
   };
 
+  const loadAssignments = async () => {
+    setIsAssignmentsLoading(true);
+    setAssignmentsError(null);
+
+    const { data, error } = await supabase
+      .from('user_locations')
+      .select('user_id, location_id');
+
+    if (error) {
+      setAssignmentsError('Failed to load user assignments.');
+      setAssignments([]);
+      setIsAssignmentsLoading(false);
+      return;
+    }
+
+    setAssignments(
+      ((data ?? []) as UserLocationRow[]).map((row) => ({
+        userId: row.user_id,
+        locationId: row.location_id,
+      }))
+    );
+    setIsAssignmentsLoading(false);
+  };
+
   useEffect(() => {
     void loadUsers();
     void loadLocations();
+    void loadAssignments();
   }, []);
+
+  useEffect(() => {
+    if (selectedUserId && users.some((user) => user.id === selectedUserId)) return;
+    setSelectedUserId(users[0]?.id ?? null);
+  }, [users, selectedUserId]);
 
   const toggleUserRole = async (user: ProfileListItem) => {
     const nextRole: UserRole = user.role === 'admin' ? 'auditor' : 'admin';
@@ -159,7 +203,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
 
     const { error } = await supabase
       .from('locations')
-      .insert({ name });
+      .insert({ id: name, name });
 
     if (error) {
       setLocationsError('Failed to add location.');
@@ -170,6 +214,29 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     setNewLocationName('');
     await loadLocations();
     setIsSavingLocation(false);
+  };
+
+  const toggleLocationAssignment = async (userId: string, locationId: string, isAssigned: boolean) => {
+    const assignmentKey = `${userId}:${locationId}`;
+    setSavingAssignmentKey(assignmentKey);
+    setAssignmentsError(null);
+
+    const result = isAssigned
+      ? await supabase.from('user_locations').delete().eq('user_id', userId).eq('location_id', locationId)
+      : await supabase.from('user_locations').insert({ user_id: userId, location_id: locationId });
+
+    if (result.error) {
+      setAssignmentsError('Failed to update store assignments.');
+      setSavingAssignmentKey(null);
+      return;
+    }
+
+    setAssignments((prev) =>
+      isAssigned
+        ? prev.filter((assignment) => !(assignment.userId === userId && assignment.locationId === locationId))
+        : [...prev, { userId, locationId }]
+    );
+    setSavingAssignmentKey(null);
   };
 
   const renderUsersTab = () => {
@@ -255,8 +322,8 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
             <input
               type="text"
               value={newLocationName}
-              onChange={(event) => setNewLocationName(event.target.value)}
-              placeholder="Add a new location"
+              onChange={(event) => setNewLocationName(event.target.value.replace(/\s+/g, '').slice(0, 8))}
+              placeholder="Add a location id"
               className="flex-1 rounded-xl border-2 border-gray-100 bg-white px-4 py-3 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-blue-500"
             />
             <button
@@ -291,13 +358,128 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     );
   };
 
+  const renderAssignmentsTab = () => {
+    if (isUsersLoading || isLocationsLoading || isAssignmentsLoading) {
+      return (
+        <div className="flex items-center justify-center py-12 text-gray-500">
+          <Loader2 size={20} className="mr-2 animate-spin" />
+          <span>Loading assignments...</span>
+        </div>
+      );
+    }
+
+    const selectedUser = users.find((user) => user.id === selectedUserId) ?? null;
+    const assignedLocationIds = new Set(
+      assignments
+        .filter((assignment) => assignment.userId === selectedUserId)
+        .map((assignment) => assignment.locationId)
+    );
+
+    return (
+      <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="space-y-3">
+          <p className="text-xs font-black uppercase tracking-wider text-gray-400">Users</p>
+          {users.map((user) => {
+            const isSelected = user.id === selectedUserId;
+            const assignedCount = assignments.filter((assignment) => assignment.userId === user.id).length;
+
+            return (
+              <button
+                key={user.id}
+                type="button"
+                onClick={() => setSelectedUserId(user.id)}
+                className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                  isSelected
+                    ? 'border-blue-200 bg-blue-50'
+                    : 'border-gray-200 bg-white hover:border-blue-200 hover:bg-blue-50/50'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-gray-900">
+                      {user.fullName || user.email || 'Unnamed'}
+                    </p>
+                    <p className="mt-1 truncate text-xs text-gray-500">{user.email || user.id}</p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-xs font-bold text-gray-600">
+                    {assignedCount}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wider text-gray-400">Assigned Stores</p>
+            <h4 className="mt-1 text-lg font-semibold text-gray-900">
+              {selectedUser ? selectedUser.fullName || selectedUser.email || 'Unnamed' : 'No user selected'}
+            </h4>
+            <p className="text-sm text-gray-500">
+              Toggle store coverage for the selected user.
+            </p>
+          </div>
+
+          {assignmentsError && (
+            <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+              {assignmentsError}
+            </div>
+          )}
+
+          {!selectedUser ? (
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">
+              {emptyStateCopy.assignments}
+            </div>
+          ) : locations.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">
+              Add locations first before assigning them.
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {locations.map((location) => {
+                const isAssigned = assignedLocationIds.has(location.id);
+                const assignmentKey = `${selectedUser.id}:${location.id}`;
+                const isSaving = savingAssignmentKey === assignmentKey;
+
+                return (
+                  <button
+                    key={location.id}
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => void toggleLocationAssignment(selectedUser.id, location.id, isAssigned)}
+                    className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${
+                      isAssigned
+                        ? 'border-blue-200 bg-blue-50 text-blue-700'
+                        : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50/50'
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold">{location.name}</p>
+                      <p className="mt-1 text-xs opacity-70">{location.id}</p>
+                    </div>
+                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
+                      isAssigned ? 'border-blue-200 bg-white' : 'border-gray-200 bg-gray-50'
+                    }`}>
+                      {isSaving ? <Loader2 size={14} className="animate-spin" /> : isAssigned ? <Check size={14} /> : null}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="h-full w-full bg-gray-50 text-gray-900">
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between border-b border-gray-100 bg-white px-4 pb-4 pt-safe shadow-sm">
           <div>
             <h2 className="text-xl font-bold">Admin Panel</h2>
-            <p className="text-sm text-gray-500">Manage user roles and location options.</p>
+            <p className="text-sm text-gray-500">Manage user roles, location data, and store assignments.</p>
           </div>
           <button
             type="button"
@@ -310,7 +492,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
         </header>
 
         <div className="flex-1 overflow-y-auto p-4">
-          <div className="mx-auto max-w-3xl space-y-4">
+          <div className="mx-auto max-w-5xl space-y-4">
             <div className="rounded-2xl border border-gray-100 bg-gray-100 p-1 shadow-sm">
               <div className="flex items-center gap-1">
                 <button
@@ -333,27 +515,51 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
                     Locations
                   </span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('assignments')}
+                  className={tabButtonClass(activeTab === 'assignments')}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Shield size={16} />
+                    Assignments
+                  </span>
+                </button>
               </div>
             </div>
 
             <section className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
               <div className="mb-4 flex items-center gap-3">
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                  {activeTab === 'users' ? <Shield size={20} /> : <MapPin size={20} />}
+                  {activeTab === 'users'
+                    ? <Shield size={20} />
+                    : activeTab === 'locations'
+                      ? <MapPin size={20} />
+                      : <UserRound size={20} />}
                 </div>
                 <div>
                   <h3 className="font-semibold text-gray-900">
-                    {activeTab === 'users' ? 'User Roles' : 'Manage Locations'}
+                    {activeTab === 'users'
+                      ? 'User Roles'
+                      : activeTab === 'locations'
+                        ? 'Manage Locations'
+                        : 'Store Assignments'}
                   </h3>
                   <p className="text-sm text-gray-500">
                     {activeTab === 'users'
                       ? 'Review profiles and switch role access.'
-                      : 'Create and review the shared location list.'}
+                      : activeTab === 'locations'
+                        ? 'Create and review the shared location list.'
+                        : 'Assign store coverage to each user account.'}
                   </p>
                 </div>
               </div>
 
-              {activeTab === 'users' ? renderUsersTab() : renderLocationsTab()}
+              {activeTab === 'users'
+                ? renderUsersTab()
+                : activeTab === 'locations'
+                  ? renderLocationsTab()
+                  : renderAssignmentsTab()}
             </section>
           </div>
         </div>

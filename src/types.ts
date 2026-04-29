@@ -23,6 +23,11 @@ export interface Location {
   name: string;
 }
 
+export interface UserLocationAssignment {
+  userId: string;
+  locationId: string;
+}
+
 export interface PhotoEntry {
   id: string;
   sessionId: string;
