@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { X, Check, RotateCcw, Pencil, Undo2, Redo2, Eraser } from 'lucide-react';
+import { X, Check, RotateCcw, Undo2, Redo2, Eraser } from 'lucide-react';
 import { motion } from 'motion/react';
 import { TIMING } from '../constants';
 
@@ -13,6 +13,7 @@ export const MarkupEditor: React.FC<MarkupEditorProps> = ({ imageData, onSave, o
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawingCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pinchRef = useRef<{ distance: number; lineWidth: number } | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState('#ef4444'); // Red default
   const [lineWidth, setLineWidth] = useState(4);
@@ -86,11 +87,26 @@ export const MarkupEditor: React.FC<MarkupEditorProps> = ({ imageData, onSave, o
     }
   }, [color, lineWidth, tool]);
 
+  const getTouchDistance = (touches: React.TouchList): number =>
+    Math.hypot(
+      touches[0].clientX - touches[1].clientX,
+      touches[0].clientY - touches[1].clientY
+    );
+
   const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-    setIsDrawing(true);
     const canvas = drawingCanvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
+
+    if ('touches' in e && e.touches.length === 2) {
+      pinchRef.current = {
+        distance: getTouchDistance(e.touches),
+        lineWidth,
+      };
+      return;
+    }
+
+    setIsDrawing(true);
 
     const rect = canvas.getBoundingClientRect();
     let clientX, clientY;
@@ -109,7 +125,22 @@ export const MarkupEditor: React.FC<MarkupEditorProps> = ({ imageData, onSave, o
     ctx.moveTo(x, y);
   };
 
-  const stopDrawing = () => {
+  const handlePinchMove = (e: React.TouchEvent) => {
+    if (e.touches.length !== 2 || !pinchRef.current) return;
+
+    const newDistance = getTouchDistance(e.touches);
+    const newLineWidth = Math.min(
+      40,
+      Math.max(2, pinchRef.current.lineWidth * (newDistance / pinchRef.current.distance))
+    );
+    setLineWidth(newLineWidth);
+  };
+
+  const stopDrawing = (e?: React.MouseEvent | React.TouchEvent) => {
+    if ('touches' in (e ?? {}) && e.touches.length < 2) {
+      pinchRef.current = null;
+    }
+
     if (isDrawing) {
       setIsDrawing(false);
       saveToHistory();
@@ -117,6 +148,11 @@ export const MarkupEditor: React.FC<MarkupEditorProps> = ({ imageData, onSave, o
   };
 
   const draw = (e: React.MouseEvent | React.TouchEvent) => {
+    if ('touches' in e && e.touches.length === 2) {
+      handlePinchMove(e);
+      return;
+    }
+
     if (!isDrawing) return;
     const canvas = drawingCanvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -230,6 +266,18 @@ export const MarkupEditor: React.FC<MarkupEditorProps> = ({ imageData, onSave, o
       </header>
 
       <div ref={containerRef} className="flex-1 flex items-center justify-center overflow-hidden p-4 relative">
+        {!isDrawing && (
+          <div className="pointer-events-none absolute top-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-full bg-black/45 px-3 py-1 text-white backdrop-blur-md">
+            <span
+              className="rounded-full bg-white"
+              style={{
+                width: `${Math.min(24, Math.max(6, lineWidth))}px`,
+                height: `${Math.min(24, Math.max(6, lineWidth))}px`,
+              }}
+            />
+            <span className="text-sm font-medium">{Math.round(lineWidth)}px</span>
+          </div>
+        )}
         <canvas
           ref={imageCanvasRef}
           className="absolute bg-white shadow-2xl max-w-full max-h-full"
@@ -282,19 +330,6 @@ export const MarkupEditor: React.FC<MarkupEditorProps> = ({ imageData, onSave, o
               <RotateCcw size={20} />
             </button>
           </div>
-        </div>
-
-        <div className="flex items-center gap-4 bg-white/10 rounded-2xl px-6 py-3">
-          <Pencil size={16} className="text-white" />
-          <input 
-            type="range" 
-            min="2" 
-            max="40" 
-            value={lineWidth} 
-            onChange={(e) => setLineWidth(parseInt(e.target.value))}
-            className="flex-1 accent-blue-500"
-          />
-          <span className="text-white text-xs font-mono w-4">{lineWidth}</span>
         </div>
       </footer>
     </motion.div>
