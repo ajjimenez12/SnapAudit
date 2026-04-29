@@ -57,9 +57,10 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
   const [isSavingLocation, setIsSavingLocation] = useState(false);
   const [deletingLocationId, setDeletingLocationId] = useState<string | null>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
-  const [savingAssignmentKey, setSavingAssignmentKey] = useState<string | null>(null);
+  const [isSavingAssignments, setIsSavingAssignments] = useState(false);
   const [newLocationName, setNewLocationName] = useState('');
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [draftAssignmentIds, setDraftAssignmentIds] = useState<string[]>([]);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [locationsError, setLocationsError] = useState<string | null>(null);
   const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
@@ -169,8 +170,10 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
   }, []);
 
   useEffect(() => {
-    if (selectedUserId && users.some((user) => user.id === selectedUserId)) return;
-    setSelectedUserId(users[0]?.id ?? null);
+    if (selectedUserId && !users.some((user) => user.id === selectedUserId)) {
+      setSelectedUserId(null);
+      setDraftAssignmentIds([]);
+    }
   }, [users, selectedUserId]);
 
   const toggleUserRole = async (user: ProfileListItem) => {
@@ -242,27 +245,83 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     setDeletingLocationId(null);
   };
 
-  const toggleLocationAssignment = async (userId: string, locationId: string, isAssigned: boolean) => {
-    const assignmentKey = `${userId}:${locationId}`;
-    setSavingAssignmentKey(assignmentKey);
+  const openAssignmentsEditor = (userId: string) => {
+    const currentAssignmentIds = assignments
+      .filter((assignment) => assignment.userId === userId)
+      .map((assignment) => assignment.locationId);
+
+    setSelectedUserId(userId);
+    setDraftAssignmentIds(currentAssignmentIds);
+    setAssignmentsError(null);
+  };
+
+  const closeAssignmentsEditor = () => {
+    if (isSavingAssignments) return;
+    setSelectedUserId(null);
+    setDraftAssignmentIds([]);
+    setAssignmentsError(null);
+  };
+
+  const toggleDraftAssignment = (locationId: string) => {
+    setDraftAssignmentIds((prev) => (
+      prev.includes(locationId)
+        ? prev.filter((id) => id !== locationId)
+        : [...prev, locationId]
+    ));
+  };
+
+  const handleSaveAssignments = async () => {
+    if (!selectedUserId) return;
+
+    setIsSavingAssignments(true);
     setAssignmentsError(null);
 
-    const result = isAssigned
-      ? await supabase.from('user_locations').delete().eq('user_id', userId).eq('location_id', locationId)
-      : await supabase.from('user_locations').insert({ user_id: userId, location_id: locationId });
+    const previousAssignments = assignments
+      .filter((assignment) => assignment.userId === selectedUserId)
+      .map((assignment) => assignment.locationId);
 
-    if (result.error) {
+    const nextIds = new Set(draftAssignmentIds);
+    const previousIds = new Set(previousAssignments);
+    const idsToAdd = draftAssignmentIds.filter((locationId) => !previousIds.has(locationId));
+    const idsToRemove = previousAssignments.filter((locationId) => !nextIds.has(locationId));
+
+    const removeResult = idsToRemove.length === 0
+      ? { error: null }
+      : await supabase
+          .from('user_locations')
+          .delete()
+          .eq('user_id', selectedUserId)
+          .in('location_id', idsToRemove);
+
+    if (removeResult.error) {
       setAssignmentsError('Failed to update store assignments.');
-      setSavingAssignmentKey(null);
+      setIsSavingAssignments(false);
       return;
     }
 
-    setAssignments((prev) =>
-      isAssigned
-        ? prev.filter((assignment) => !(assignment.userId === userId && assignment.locationId === locationId))
-        : [...prev, { userId, locationId }]
-    );
-    setSavingAssignmentKey(null);
+    const insertResult = idsToAdd.length === 0
+      ? { error: null }
+      : await supabase
+          .from('user_locations')
+          .insert(idsToAdd.map((locationId) => ({ user_id: selectedUserId, location_id: locationId })));
+
+    if (insertResult.error) {
+      setAssignmentsError('Failed to update store assignments.');
+      setIsSavingAssignments(false);
+      return;
+    }
+
+    setAssignments((prev) => {
+      const retained = prev.filter((assignment) => assignment.userId !== selectedUserId);
+      const nextAssignments = draftAssignmentIds.map((locationId) => ({
+        userId: selectedUserId,
+        locationId,
+      }));
+      return [...retained, ...nextAssignments];
+    });
+
+    setIsSavingAssignments(false);
+    closeAssignmentsEditor();
   };
 
   const renderUsersTab = () => {
@@ -412,11 +471,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     }
 
     const selectedUser = users.find((user) => user.id === selectedUserId) ?? null;
-    const assignedLocationIds = new Set(
-      assignments
-        .filter((assignment) => assignment.userId === selectedUserId)
-        .map((assignment) => assignment.locationId)
-    );
+    const assignedLocationIds = new Set(draftAssignmentIds);
 
     return (
       <div className="space-y-4">
@@ -434,7 +489,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
                 <button
                   key={user.id}
                   type="button"
-                  onClick={() => setSelectedUserId(user.id)}
+                  onClick={() => openAssignmentsEditor(user.id)}
                   className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-left transition-colors hover:border-blue-200 hover:bg-blue-50/50"
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -465,7 +520,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
             <button
               type="button"
               aria-label="Close assignments"
-              onClick={() => setSelectedUserId(null)}
+              onClick={closeAssignmentsEditor}
               className="absolute inset-0 bg-black/45 backdrop-blur-sm"
             />
 
@@ -477,20 +532,12 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
                     {selectedUser.fullName || selectedUser.email || 'Unnamed'}
                   </h4>
                   <p className="text-sm text-gray-500">
-                    Toggle store coverage for this user, then close to return to the list.
+                    Select the stores for this user, then save or cancel.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedUserId(null)}
-                  className="rounded-xl p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
-                  aria-label="Close assignments"
-                >
-                  <X size={20} />
-                </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-5">
+              <div className="flex-1 overflow-y-auto px-5 py-5">
                 {assignmentsError && (
                   <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
                     {assignmentsError}
@@ -505,15 +552,13 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
                   <div className="grid gap-3 sm:grid-cols-2">
                     {locations.map((location) => {
                       const isAssigned = assignedLocationIds.has(location.id);
-                      const assignmentKey = `${selectedUser.id}:${location.id}`;
-                      const isSaving = savingAssignmentKey === assignmentKey;
 
                       return (
                         <button
                           key={location.id}
                           type="button"
-                          disabled={isSaving}
-                          onClick={() => void toggleLocationAssignment(selectedUser.id, location.id, isAssigned)}
+                          disabled={isSavingAssignments}
+                          onClick={() => toggleDraftAssignment(location.id)}
                           className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${
                             isAssigned
                               ? 'border-blue-200 bg-blue-50 text-blue-700'
@@ -527,13 +572,32 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
                           <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
                             isAssigned ? 'border-blue-200 bg-white' : 'border-gray-200 bg-gray-50'
                           }`}>
-                            {isSaving ? <Loader2 size={14} className="animate-spin" /> : isAssigned ? <Check size={14} /> : null}
+                            {isAssigned ? <Check size={14} /> : null}
                           </span>
                         </button>
                       );
                     })}
                   </div>
                 )}
+              </div>
+
+              <div className="sticky bottom-0 flex justify-end gap-3 border-t border-gray-100 bg-white px-5 py-4 shadow-[0_-8px_20px_rgba(15,23,42,0.06)]">
+                <button
+                  type="button"
+                  onClick={closeAssignmentsEditor}
+                  disabled={isSavingAssignments}
+                  className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveAssignments()}
+                  disabled={isSavingAssignments}
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSavingAssignments ? 'Saving...' : 'Save'}
+                </button>
               </div>
             </div>
           </div>
