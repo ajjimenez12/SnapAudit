@@ -9,6 +9,20 @@ export type Tag =
   | 'Brand Safety'
   | 'Other';
 
+export type UserRole = 'admin' | 'auditor';
+
+export interface UserProfile {
+  id: string;
+  role: UserRole;
+  fullName: string | null;
+  createdAt: number;
+}
+
+export interface Location {
+  id: string;
+  name: string;
+}
+
 export interface PhotoEntry {
   id: string;
   sessionId: string;
@@ -24,6 +38,7 @@ export interface Session {
   id: string;
   title: string;
   location?: string;
+  locationId?: string;
   createdAt: number;
 }
 
