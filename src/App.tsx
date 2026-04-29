@@ -35,6 +35,7 @@ import { PRESET_TAGS, HAPTIC, TIMING, CACHE, PAGINATION, DATE_FORMAT, STORAGE_KE
 import { Tag, PhotoEntry, Session, View } from './types';
 import { resizeImage } from './utils/image';
 import { MarkupEditor } from './components/MarkupEditor';
+import { AdminPanel } from './components/AdminPanel';
 import { supabase } from './lib/supabaseClient';
 import { isTestAuthEnabled } from './lib/runtimeFlags';
 import { dataUrlToBlob, blobToDataUrl } from './utils/dataUrl';
@@ -610,7 +611,7 @@ function HistoryView({
 // --- Main App ---
 
 export default function App() {
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, profile, isLoading: authLoading } = useAuth();
   const {
     sessions,
     photos,
@@ -718,6 +719,7 @@ export default function App() {
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [showPhotosList, setShowPhotosList] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [lastView, setLastView] = useState<View>('home');
   const [shareMenuSession, setShareMenuSession] = useState<{session: Session, photos: PhotoEntry[]} | null>(null);
   const [historyFilter, setHistoryFilter] = useState(() => {
@@ -1868,6 +1870,12 @@ export default function App() {
     return <AuthView />;
   }
 
+  const adminPanelOverlay = isAdminPanelOpen ? (
+    <div className="fixed inset-0 z-[120] bg-black/40 backdrop-blur-sm">
+      <AdminPanel onClose={() => setIsAdminPanelOpen(false)} />
+    </div>
+  ) : null;
+
   if (view === 'history') {
     return (
       <div className="h-screen flex flex-col">
@@ -1904,6 +1912,7 @@ export default function App() {
         <AnimatePresence>
           {renderConfirmationModal()}
         </AnimatePresence>
+        {adminPanelOverlay}
         <SavedToast />
       </div>
     );
@@ -1954,6 +1963,7 @@ export default function App() {
 
           <ReportContent session={currentSession} sessionPhotos={currentPhotos} />
         </div>
+        {adminPanelOverlay}
         <SavedToast />
       </div>
     );
@@ -2013,6 +2023,14 @@ export default function App() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {profile?.role === 'admin' && (
+            <button
+              onClick={() => setIsAdminPanelOpen(true)}
+              className="text-[10px] font-bold px-2 py-1 rounded-full border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+            >
+              Admin
+            </button>
+          )}
           <button
             onClick={() => {
               if (isTestAuthEnabled()) {
@@ -2069,7 +2087,7 @@ export default function App() {
           </motion.div>
         )}
         
-        <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait">
           {view === 'home' ? (
             <motion.div 
               key="home"
@@ -2300,6 +2318,8 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      {adminPanelOverlay}
 
       {/* Floating Action Button for Camera */}
       <input 
