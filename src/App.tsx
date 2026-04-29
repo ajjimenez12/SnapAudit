@@ -2334,10 +2334,6 @@ export default function App() {
                   vibrate(HAPTIC.SUCCESS);
                   setView('report');
                 }}
-                onShowPhotos={() => {
-                  vibrate(HAPTIC.SUCCESS);
-                  setShowPhotosList(true);
-                }}
                 onUpload={() => {
                   vibrate(HAPTIC.SUCCESS);
                   pickFromFiles();
@@ -2715,14 +2711,12 @@ const snapNativeZoom = (value: number, range: CameraZoomRange) => {
 };
 
 function CameraView({ 
-  onCapture, 
-  onDone, 
-  onShowPhotos,
+  onCapture,
+  onDone,
   onUpload
-}: { 
-  onCapture: (data: string) => void, 
-  onDone: () => void, 
-  onShowPhotos: () => void,
+}: {
+  onCapture: (data: string) => void,
+  onDone: () => void,
   onUpload: () => void
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -2956,7 +2950,7 @@ function CameraView({
           onClick={onDone}
           className="bg-blue-600/90 backdrop-blur-md border-none shadow-lg"
         >
-          Done
+          Review
         </Button>
       </div>
 
@@ -2965,26 +2959,18 @@ function CameraView({
         <span className="w-12 text-center text-sm font-bold tabular-nums" aria-live="polite">{zoom.toFixed(1)}x</span>
       </div>
 
+      <button
+        onClick={capture}
+        disabled={!isCameraReady}
+        aria-label="Take snapshot"
+        className="absolute left-1/2 -translate-x-1/2 bottom-8 z-10 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50 disabled:opacity-50 disabled:active:scale-100"
+      >
+        <div className="w-16 h-16 rounded-full border-2 border-black/10" />
+      </button>
+
       {/* Bottom Controls */}
-      <div className="absolute bottom-0 left-0 right-0 p-8 pb-safe-offset-8 flex items-center justify-between z-10 bg-gradient-to-t from-black/60 to-transparent">
-        <button 
-          onClick={onShowPhotos}
-          aria-label="Show session photos"
-          className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white active:scale-90 transition-transform"
-        >
-          <ImageIcon size={24} />
-        </button>
-
-        <button 
-          onClick={capture}
-          disabled={!isCameraReady}
-          aria-label="Take snapshot"
-          className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50 disabled:opacity-50 disabled:active:scale-100"
-        >
-          <div className="w-16 h-16 rounded-full border-2 border-black/10" />
-        </button>
-
-        <button 
+      <div className="absolute bottom-0 left-0 right-0 p-8 pb-safe-offset-8 flex items-center justify-end z-10 bg-gradient-to-t from-black/60 to-transparent">
+        <button
           onClick={onUpload}
           aria-label="Upload photo"
           className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white active:scale-90 transition-transform"
