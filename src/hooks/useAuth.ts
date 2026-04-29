@@ -8,6 +8,7 @@ type ProfileRow = {
   id: string;
   role: UserProfile['role'];
   full_name: string | null;
+  is_hidden: boolean | null;
   created_at: string;
 };
 
@@ -31,6 +32,7 @@ export function useAuth() {
           id: TEST_USER_ID,
           role: 'admin',
           fullName: 'Test User',
+          isHidden: false,
           createdAt: 0,
         }
       : null
@@ -76,6 +78,7 @@ export function useAuth() {
         id: TEST_USER_ID,
         role: 'admin',
         fullName: 'Test User',
+        isHidden: false,
         createdAt: 0,
       });
       setAssignedLocationIds([]);
@@ -93,7 +96,7 @@ export function useAuth() {
     const ensureProfile = async () => {
       const profileResult = await supabase
         .from('profiles')
-        .select('id, role, full_name, created_at')
+        .select('id, role, full_name, is_hidden, created_at')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -110,6 +113,7 @@ export function useAuth() {
           id: profileRow.id,
           role: profileRow.role,
           fullName: profileRow.full_name,
+          isHidden: Boolean(profileRow.is_hidden),
           createdAt: new Date(profileRow.created_at).getTime(),
         });
         return;
@@ -126,10 +130,11 @@ export function useAuth() {
             id: user.id,
             role: 'auditor',
             full_name: metadataFullName,
+            is_hidden: false,
           },
           { onConflict: 'id' }
         )
-        .select('id, role, full_name, created_at')
+        .select('id, role, full_name, is_hidden, created_at')
         .single();
 
       if (!isMounted) return;
@@ -144,6 +149,7 @@ export function useAuth() {
         id: profileRow.id,
         role: profileRow.role,
         fullName: profileRow.full_name,
+        isHidden: Boolean(profileRow.is_hidden),
         createdAt: new Date(profileRow.created_at).getTime(),
       });
     };

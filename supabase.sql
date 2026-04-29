@@ -19,8 +19,12 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   role text not null default 'auditor' check (role in ('admin', 'auditor')),
   full_name text,
+  is_hidden boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table if exists public.profiles
+  add column if not exists is_hidden boolean not null default false;
 
 create table if not exists public.locations (
   id text primary key,
@@ -196,7 +200,8 @@ select
   p.full_name,
   u.email
 from public.profiles p
-join auth.users u on u.id = p.id;
+join auth.users u on u.id = p.id
+where coalesce(p.is_hidden, false) = false;
 
 revoke all on public.admin_user_directory from public;
 grant select on public.admin_user_directory to authenticated;

@@ -27,6 +27,7 @@ type ProfileRow = {
   id: string;
   role: UserRole;
   full_name: string | null;
+  is_hidden: boolean | null;
 };
 
 type UserLocationRow = {
@@ -98,7 +99,8 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
 
     const profileResult = await supabase
       .from('profiles')
-      .select('id, role, full_name')
+      .select('id, role, full_name, is_hidden')
+      .eq('is_hidden', false)
       .order('full_name', { ascending: true });
 
     if (profileResult.error) {

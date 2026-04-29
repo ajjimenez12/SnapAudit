@@ -15,6 +15,7 @@ export interface UserProfile {
   id: string;
   role: UserRole;
   fullName: string | null;
+  isHidden: boolean;
   createdAt: number;
 }
 
