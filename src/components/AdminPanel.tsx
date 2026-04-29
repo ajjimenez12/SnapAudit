@@ -13,6 +13,20 @@ type ProfileListItem = {
   id: string;
   role: UserRole;
   fullName: string | null;
+  email: string | null;
+};
+
+type AdminUserDirectoryRow = {
+  id: string;
+  role: UserRole;
+  full_name: string | null;
+  email: string | null;
+};
+
+type ProfileRow = {
+  id: string;
+  role: UserRole;
+  full_name: string | null;
 };
 
 const tabButtonClass = (isActive: boolean) =>
@@ -48,12 +62,30 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     setIsUsersLoading(true);
     setUsersError(null);
 
-    const { data, error } = await supabase
+    const directoryResult = await supabase
+      .from('admin_user_directory')
+      .select('id, role, full_name, email')
+      .order('full_name', { ascending: true });
+
+    if (!directoryResult.error) {
+      setUsers(
+        ((directoryResult.data ?? []) as AdminUserDirectoryRow[]).map((profile) => ({
+          id: profile.id,
+          role: profile.role,
+          fullName: profile.full_name ?? null,
+          email: profile.email ?? null,
+        }))
+      );
+      setIsUsersLoading(false);
+      return;
+    }
+
+    const profileResult = await supabase
       .from('profiles')
       .select('id, role, full_name')
       .order('full_name', { ascending: true });
 
-    if (error) {
+    if (profileResult.error) {
       setUsersError('Failed to load users.');
       setUsers([]);
       setIsUsersLoading(false);
@@ -61,10 +93,11 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
     }
 
     setUsers(
-      (data ?? []).map((profile) => ({
-        id: profile.id as string,
-        role: profile.role as UserRole,
-        fullName: (profile.full_name as string | null) ?? null,
+      ((profileResult.data ?? []) as ProfileRow[]).map((profile) => ({
+        id: profile.id,
+        role: profile.role,
+        fullName: profile.full_name ?? null,
+        email: null,
       }))
     );
     setIsUsersLoading(false);
@@ -173,7 +206,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="truncate font-semibold text-gray-900">
-                    {user.fullName || 'Unnamed'}
+                    {user.fullName || user.email || 'Unnamed'}
                   </p>
                   <span
                     className={`rounded-full border px-2.5 py-1 text-xs font-bold uppercase tracking-wide ${roleBadgeClass(user.role)}`}
@@ -181,7 +214,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
                     {user.role}
                   </span>
                 </div>
-                <p className="mt-1 truncate text-xs text-gray-500">{user.id}</p>
+                <p className="mt-1 truncate text-xs text-gray-500">{user.email || user.id}</p>
               </div>
 
               <button
