@@ -267,6 +267,15 @@ function AuthView() {
     }
   };
 
+  const switchMode = (nextMode: 'sign-in' | 'sign-up') => {
+    setMode(nextMode);
+    setError(null);
+    setInfo(null);
+    if (nextMode === 'sign-in') {
+      setFullName('');
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
       <header className="shrink-0 z-30 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-100 dark:border-gray-800 px-4 pt-safe pb-4 flex items-center justify-between">
@@ -282,11 +291,7 @@ function AuthView() {
         <div className="mb-6 flex rounded-2xl border border-gray-100 bg-white p-1 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <button
             type="button"
-            onClick={() => {
-              setMode('sign-in');
-              setError(null);
-              setInfo(null);
-            }}
+            onClick={() => switchMode('sign-in')}
             className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
               mode === 'sign-in'
                 ? 'bg-blue-600 text-white'
@@ -297,11 +302,7 @@ function AuthView() {
           </button>
           <button
             type="button"
-            onClick={() => {
-              setMode('sign-up');
-              setError(null);
-              setInfo(null);
-            }}
+            onClick={() => switchMode('sign-up')}
             className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
               mode === 'sign-up'
                 ? 'bg-blue-600 text-white'
@@ -333,8 +334,31 @@ function AuthView() {
           </div>
         )}
 
-        <div className="space-y-3">
-          {mode === 'sign-up' && (
+        {mode === 'sign-in' ? (
+          <div key="sign-in-form" className="space-y-3">
+            <input
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
+              autoCapitalize="none"
+              autoCorrect="off"
+              inputMode="email"
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
+            />
+            <Button fullWidth disabled={isWorking || !email || !password} onClick={signIn}>
+              {isWorking ? 'Signing in...' : 'Sign in'}
+            </Button>
+          </div>
+        ) : (
+          <div key="sign-up-form" className="space-y-3">
             <input
               type="text"
               placeholder="Full name"
@@ -343,40 +367,29 @@ function AuthView() {
               className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
               autoCapitalize="words"
             />
-          )}
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
-            autoCapitalize="none"
-            autoCorrect="off"
-            inputMode="email"
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
-          />
-
-          {mode === 'sign-in' ? (
-            <Button fullWidth disabled={isWorking || !email || !password} onClick={signIn}>
-              {isWorking ? 'Signing in...' : 'Sign in'}
-            </Button>
-          ) : (
+            <input
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
+              autoCapitalize="none"
+              autoCorrect="off"
+              inputMode="email"
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 dark:border-gray-800 focus:border-blue-500 outline-none transition-colors bg-white dark:bg-gray-900"
+            />
             <div className="flex gap-3 pt-2">
               <Button
                 variant="outline"
                 fullWidth
                 disabled={isWorking}
-                onClick={() => {
-                  setMode('sign-in');
-                  setError(null);
-                  setInfo(null);
-                }}
+                onClick={() => switchMode('sign-in')}
               >
                 Cancel
               </Button>
@@ -388,8 +401,8 @@ function AuthView() {
                 {isWorking ? 'Creating...' : 'Create account'}
               </Button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="mt-8 text-xs text-gray-400 leading-relaxed">
           Setup: create a Supabase project, run `supabase.sql`, and create a private Storage bucket named `photos`.
