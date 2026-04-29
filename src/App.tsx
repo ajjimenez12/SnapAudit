@@ -2963,7 +2963,7 @@ function CameraView({
         onClick={capture}
         disabled={!isCameraReady}
         aria-label="Take snapshot"
-        className="absolute left-1/2 -translate-x-1/2 bottom-8 z-10 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50 disabled:opacity-50 disabled:active:scale-100"
+        className="absolute left-1/2 -translate-x-1/2 bottom-8 z-20 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform border-4 border-gray-300/50 disabled:opacity-50 disabled:active:scale-100"
       >
         <div className="w-16 h-16 rounded-full border-2 border-black/10" />
       </button>
