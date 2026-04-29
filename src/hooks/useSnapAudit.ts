@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Session, PhotoEntry, Tag } from '../types';
 import { STORAGE_KEYS, DEFAULT_STORES } from '../constants';
+import {
+  clearUserPhotoImageData,
+  deletePhotoImageData,
+  deletePhotoImageDataMany,
+  isPhotoStoreAvailable,
+  loadPhotoImageData,
+  savePhotoImageData,
+} from '../utils/photoStore';
 
 const isLocalStorageAvailable = () => {
   try {
@@ -11,6 +19,26 @@ const isLocalStorageAvailable = () => {
   } catch (e) {
     return false;
   }
+};
+
+const stripPhotoImageData = (photo: PhotoEntry): PhotoEntry => {
+  if (!isPhotoStoreAvailable()) return photo;
+  const { imageData, ...metadata } = photo;
+  return metadata;
+};
+
+const persistPhotoImageData = (userId: string | null, photoId: string, imageData?: string) => {
+  if (!userId || !imageData || !isPhotoStoreAvailable()) return;
+  void savePhotoImageData(userId, photoId, imageData).catch((e) => {
+    console.error('Failed to save photo image data to IndexedDB', e);
+  });
+};
+
+const removePhotoImageData = (userId: string | null, photoId: string) => {
+  if (!userId || !isPhotoStoreAvailable()) return;
+  void deletePhotoImageData(userId, photoId).catch((e) => {
+    console.error('Failed to delete photo image data from IndexedDB', e);
+  });
 };
 
 export function useSnapAudit() {
@@ -69,7 +97,10 @@ export function useSnapAudit() {
   useEffect(() => {
     if (isStorageAvailable && activeUserId) {
       try {
-        localStorage.setItem(storageKey(STORAGE_KEYS.PHOTOS, activeUserId), JSON.stringify(photos));
+        localStorage.setItem(
+          storageKey(STORAGE_KEYS.PHOTOS, activeUserId),
+          JSON.stringify(photos.map(stripPhotoImageData))
+        );
         setStorageError(null);
       } catch (e) {
         console.error('Failed to save photos to localStorage', e);
@@ -129,11 +160,19 @@ export function useSnapAudit() {
   const deleteSession = useCallback((id: string) => {
     setDeletedSessionIds(prev => (prev.includes(id) ? prev : [id, ...prev].slice(0, 500)));
     setSessions(prev => prev.filter(s => s.id !== id));
-    setPhotos(prev => prev.filter(p => p.sessionId !== id));
+    setPhotos(prev => {
+      const removedIds = prev.filter(p => p.sessionId === id).map(p => p.id);
+      if (activeUserId && isPhotoStoreAvailable()) {
+        void deletePhotoImageDataMany(activeUserId, removedIds).catch((e) => {
+          console.error('Failed to delete session photo image data from IndexedDB', e);
+        });
+      }
+      return prev.filter(p => p.sessionId !== id);
+    });
     if (currentSessionId === id) {
       setCurrentSessionId(null);
     }
-  }, [currentSessionId]);
+  }, [activeUserId, currentSessionId]);
 
   const addPhoto = useCallback((sessionId: string, imageData: string, tag: Tag, comment: string) => {
     const newPhoto: PhotoEntry = {
@@ -145,31 +184,36 @@ export function useSnapAudit() {
       createdAt: Date.now(),
       synced: false,
     };
+    persistPhotoImageData(activeUserId, newPhoto.id, imageData);
     setPhotos(prev => [newPhoto, ...prev]);
     return newPhoto;
-  }, []);
+  }, [activeUserId]);
 
   const markAsSynced = useCallback((photoId: string) => {
     setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, synced: true } : p));
   }, []);
 
   const updatePhoto = useCallback((photoId: string, updates: Partial<Pick<PhotoEntry, 'tag' | 'comment' | 'imageData' | 'storagePath' | 'synced'>>) => {
+    if (updates.imageData) {
+      persistPhotoImageData(activeUserId, photoId, updates.imageData);
+    } else if (updates.imageData === undefined && updates.synced && updates.storagePath) {
+      removePhotoImageData(activeUserId, photoId);
+    }
     setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, ...updates } : p));
-  }, []);
+  }, [activeUserId]);
 
   const deletePhoto = useCallback((photoId: string) => {
+    removePhotoImageData(activeUserId, photoId);
     setPhotos(prev => prev.filter(p => p.id !== photoId));
-  }, []);
+  }, [activeUserId]);
 
   const getSessionPhotos = useCallback((sessionId: string) => {
     return photos.filter(p => p.sessionId === sessionId).sort((a, b) => b.createdAt - a.createdAt);
   }, [photos]);
 
   const addStore = useCallback((storeNumber: string) => {
-    if (!stores.includes(storeNumber)) {
-      setStores(prev => [...prev, storeNumber].sort());
-    }
-  }, [stores]);
+    setStores(prev => (prev.includes(storeNumber) ? prev : [...prev, storeNumber].sort()));
+  }, []);
 
   const clearAllData = useCallback(() => {
     setSessions([]);
@@ -183,6 +227,11 @@ export function useSnapAudit() {
         localStorage.removeItem(storageKey(STORAGE_KEYS.PHOTOS, activeUserId));
         localStorage.removeItem(storageKey(STORAGE_KEYS.CURRENT_SESSION_ID, activeUserId));
         localStorage.removeItem(storageKey(STORAGE_KEYS.DELETED_SESSIONS, activeUserId));
+        if (isPhotoStoreAvailable()) {
+          void clearUserPhotoImageData(activeUserId).catch((e) => {
+            console.error('Failed to clear user photo image data from IndexedDB', e);
+          });
+        }
       }
     }
   }, [isStorageAvailable, activeUserId, storageKey]);
@@ -191,6 +240,11 @@ export function useSnapAudit() {
     setPhotos([]);
     if (isStorageAvailable && activeUserId) {
       localStorage.removeItem(storageKey(STORAGE_KEYS.PHOTOS, activeUserId));
+    }
+    if (activeUserId && isPhotoStoreAvailable()) {
+      void clearUserPhotoImageData(activeUserId).catch((e) => {
+        console.error('Failed to clear photo image data from IndexedDB', e);
+      });
     }
   }, [isStorageAvailable, activeUserId, storageKey]);
 
@@ -216,7 +270,24 @@ export function useSnapAudit() {
     try {
       const savedPhotos = localStorage.getItem(storageKey(STORAGE_KEYS.PHOTOS, userId));
       const parsedPhotos = savedPhotos ? JSON.parse(savedPhotos) : [];
-      setPhotos(Array.isArray(parsedPhotos) ? parsedPhotos : []);
+      const nextPhotos = Array.isArray(parsedPhotos) ? parsedPhotos : [];
+      setPhotos(nextPhotos);
+      if (isPhotoStoreAvailable()) {
+        void (async () => {
+          await Promise.all(nextPhotos.map(async (photo: PhotoEntry) => {
+            if (photo.imageData) {
+              await savePhotoImageData(userId, photo.id, photo.imageData);
+              return;
+            }
+
+            const imageData = await loadPhotoImageData(userId, photo.id);
+            if (!imageData) return;
+            setPhotos(prev => prev.map(p => p.id === photo.id && !p.imageData ? { ...p, imageData } : p));
+          }));
+        })().catch((e) => {
+          console.error('Failed to hydrate photo image data from IndexedDB', e);
+        });
+      }
     } catch {
       setPhotos([]);
     }
